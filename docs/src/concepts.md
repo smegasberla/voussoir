@@ -273,9 +273,12 @@ that look like magic.
 | Stored state | until the user deletes it | the user's settings | [Storage](storage.md) |
 
 The distinction that matters: **a hot reload replaces your command code but not the
-process**, so anything held in a Rust `static` survives an edit, and anything the
-page holds in a variable does not survive a page reload. If a value seems to
-"reset randomly" during development, it is almost always the second case.
+process**, so anything the *page* holds in a variable survives a Rust edit but not a
+page reload. And the reverse, which is the part that surprises people: a `static`
+in the commands crate **does not** survive a reload, because the library that owned
+it is replaced. A counter kept in a `static` resets every time you save, while the
+same code is correct in release, where the crate is linked once. Put anything that
+must outlive an edit in [process state](state.md).
 
 Configuration is a fourth thing, and it is not state at all: `voussoir.json` is
 compiled into the binary, so it changes only when you rebuild.
