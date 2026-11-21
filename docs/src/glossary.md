@@ -61,7 +61,7 @@ worker thread (`async_command`), or the shared async runtime (`async_fn`). See
 **Worker thread** — a thread spawned per call, for blocking work.
 
 **Runtime** — the shared async executor behind `async_fn`. One per process, one
-worker per core, minimum two.
+worker per available core, minimum two.
 
 **Command table** — the `COMMANDS` slice in the commands crate. Hot-reloadable.
 

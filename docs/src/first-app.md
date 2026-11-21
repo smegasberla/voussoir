@@ -196,10 +196,16 @@ pub static COMMANDS: &[Command] = &[
 ];
 ```
 
-The scaffold's table is written one field per line, exactly like this, and there
-is a reason: `voussoir build` parses those `name: "…"` literals to check that every
-command the frontend calls actually exists. Keep the shape and the check keeps
-working.
+The scaffold's table is written one field per line because the shell loops over it
+in `main.rs`, not because tooling parses it.
+
+**What `voussoir build` does check is a different thing, and worth not confusing
+with this.** It compares the command names registered in the **desktop** shell with
+those in the **Android** shell, because one frontend and two shells means a command
+missing from one of them fails only on the platform nobody tested. That check reads
+`.command("name", ...)` call sites, not this `name: "..."` table, and it does not read
+the frontend at all. So a typo in `src/main.ts` is not caught by it; it arrives as
+`kind: "unknown"` at runtime. That is the `unknown` row in the failure table below.
 
 The table already exists above `greet`, with `greet` in it; you are adding one
 entry, not writing the list from scratch. `Command`, `Kind` and `COMMANDS` are
