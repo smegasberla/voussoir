@@ -102,7 +102,7 @@ The scaffolded command looks like this, in
 `native/commands/src/lib.rs`:
 
 ```rust
-use voussoir::serde_json::{json, Value};
+use serde_json::{json, Value};
 
 fn greet(payload: &Value) -> Result<Value, String> {
     let name = payload

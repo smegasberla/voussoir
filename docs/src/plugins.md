@@ -29,7 +29,7 @@ not be linked in at all.
 
 ```rust
 use voussoir::{App, Plugin};
-use voussoir::serde_json::Value;
+use serde_json::Value;
 
 pub struct Sqlite {
     pub path: std::path::PathBuf,
