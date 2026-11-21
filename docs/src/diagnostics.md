@@ -26,7 +26,7 @@ in memory, readable from the page on any platform. `--verbose` only decides
 whether it is filled; the machinery is always present and costs one cached atomic
 load when off.
 
-## The four kinds
+## The five kinds
 
 | Kind | Recorded when | The question it answers |
 | --- | --- | --- |
