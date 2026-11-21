@@ -80,9 +80,24 @@ await window.voussoir.invoke("storage.set", {
 ## Theory: when a write becomes durable
 
 `storage.set` writes the whole map to disk and flushes it before it resolves. So
-when your promise resolves, the bytes are on disk, not merely buffered. The cost
-is that each `set` is one file write: fine for a settings toggle, wrong for
-something that fires per keystroke.
+when your promise resolves, the bytes are on disk, not merely buffered.
+
+The write is three steps, and each one exists to make a crash survivable:
+
+1. **Serialize** the whole map, pretty-printed.
+2. **Check the cap** against those bytes, before touching the disk.
+3. **Write `storage.json.tmp`, `sync_all`, then rename** over `storage.json`.
+
+The rename is the commit point. On every platform `rename` within one filesystem is
+atomic, so a reader sees either the old file or the new one, never a half-written
+one. Without it, a crash mid-write would leave a truncated JSON file and the app
+would start with no settings at all, which reads to a user as "it forgot everything".
+
+`sync_all` before the rename is what makes the claim honest: it waits for the bytes
+to reach the device rather than the operating system's cache, so a power loss after
+the promise resolves does not lose the write. That is also why each `set` costs a
+real disk flush: fine for a settings toggle, wrong for something that fires per
+keystroke.
 
 For anything frequent, keep the value in memory and write on a boundary:
 
@@ -115,6 +130,10 @@ A write that would take the file past 4 MB is refused with an error rather than
 silently filling the user's disk. The reason is that a store that large is
 almost always a bug: a key derived from user input, or an array that grows once per
 launch.
+
+The cap is measured on the **serialized, pretty-printed** body, not on the sum of
+your values, so indentation counts against you. A map of many small keys reaches
+it sooner than the raw bytes suggest.
 
 When you hit it, the fix is not a bigger cap. It is one of:
 
