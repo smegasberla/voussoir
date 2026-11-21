@@ -37,8 +37,10 @@ docs/src/
   - [The frontend](frontend.md)
 ```
 
-Depth two is a child chapter: it indents in the sidebar and does not get its own
-level in the table of contents. Depth three renders too, and there is no level four.
+Indentation is read as **presence or absence**, not as a count: the renderer takes
+any leading whitespace to mean "child of the nearest unindented entry above". So a
+sub-item is a sub-item whether it is indented two spaces or six, and there is no
+third level, because a third level would look identical to a second one.
 
 **Why a list and not front matter:** because the file that drives navigation is then
 a file a person can read and reorder, and the check can validate it with the same

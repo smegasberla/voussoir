@@ -251,8 +251,8 @@ performance story of your app:
 | A worker thread | `async_command` | reading files, network, hashing | one thread per call, so a flood costs memory |
 | Shared runtime | `async_fn` (needs `rt`) | awaiting many things at once | an extra dependency and a scheduler |
 
-The worker path has a deliberate bound: at most `available_parallelism()` workers,
-never fewer than four. Past the bound, requests are **refused** with `kind: "busy"`
+The worker path has a deliberate bound: `available_parallelism()` workers, never
+fewer than four. Past the bound, requests are **refused** with `kind: "busy"`
 rather than queued. A queue would hold the page's promise open and still cost a
 thread later, so the honest answer is "not now, ask again", and a `busy` is
 always safe to retry because the handler never started.
