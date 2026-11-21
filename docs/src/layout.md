@@ -96,22 +96,24 @@ the reason [plugins](plugins.md) are Rust rather than JavaScript.
 
 Every key is optional. Each one, and what happens when it is absent:
 
-- **`name`** — the app identity. Used for the data directory, the package name and
-  the Android package stem. Absent: derived from the crate.
+- **`name`** — the app identity. Used for the window title, the data directory, the
+  package name and the Android package stem. Absent: `"Voussoir App"`.
 - **`title`** — the window title. Absent: falls back to `name`.
-- **`width` / `height`** — initial window size in logical pixels. Absent: the
-  defaults (900×680 in the scaffold).
+- **`width` / `height`** — initial window size in logical pixels. Absent: 800×600,
+  which is `Config::default` rather than whatever the scaffold happens to write.
 - **`entry`** — the page the first window loads, relative to the served root. A
   leading `/` is stripped. Absent: `index.html`.
 - **`command_timeout_ms`** — how long the page waits before rejecting with
-  `kind: "timeout"`. `0` disables the deadline. A page can override per call:
-  `invoke("slow", payload, { timeout: 300000 })`.
+  `kind: "timeout"`. Default 30000. `0` disables the deadline. A page can override
+  per call: `invoke("slow", payload, { timeout: 300000 })`. The rejection does not
+  cancel the handler, so the work may still complete.
 - **`commands`** — the global allowlist. **Absent means everything registered**,
   which surprises people: leaving it out does not lock anything down.
 - **`windows`** — per-label narrowing. Intersected with `commands`, so it can only
   remove. See [Per-window allowlists](allowlists.md).
 - **`update.url`** — the JSON endpoint `update.check` reads. Absent: the command
-  answers `{"configured": false}` rather than failing.
+  answers `{"configured": false, "available": false}` rather than failing, so an app
+  can ship before its update feed exists.
 
 `include_str!` embeds the file at compile time, so a shipped app never reads
 configuration from disk. A writable working directory cannot redirect it, and
@@ -147,8 +149,9 @@ works in release builds too, so you do not need two versions of the code. See
 voussoir = { path = "...", features = ["full", "storage"] }
 ```
 
-- `full` is `menu + dialogs + updater + devtools`.
-- `storage` adds the `storage.*` commands.
+- `full` is `menu + dialogs + updater + devtools + storage`.
+- `storage` is therefore already in `full`, and is listed again so that turning
+  `full` down still leaves a store an app can use.
 
 Turn them down if you do not use them: each one links a platform crate. Turn
 `tray` on separately; it is not part of `full` because it implies a background

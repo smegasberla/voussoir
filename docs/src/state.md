@@ -39,8 +39,13 @@ state::clear();
 state::reload_generation();               // u64, the live library generation
 ```
 
-Eight functions, no generics, no lifetimes. Values are `serde_json::Value`, so
-anything you can express as JSON you can store, and nothing else.
+Seven public functions, no generics, no lifetimes. Values are `serde_json::Value`,
+so anything you can express as JSON you can store, and nothing else.
+
+`clear()` is public but you should not call it in an app: its own documentation says
+the shell calls it in tests, so a test cannot be affected by state another test left
+behind. There is no per-key namespace either, so a plugin and the app that installs
+it share one map and can collide on a key name.
 
 **Why JSON and not `Any`:** because the caller reads it back as a different type
 than it wrote. A typed store would need a lifetime parameter or unsafe casts, and
@@ -76,10 +81,12 @@ fn pool() -> std::sync::MutexGuard<'static, (u64, Pool)> {
 ```
 
 The `POOL` static itself lives in the command library, so on a reload it is
-recreated empty and the generation check is redundant there. It is not redundant
-when the pool is created by the shell and the command crate only borrows it, which
-is the case this pattern is for: the generation says "the code that asked differs",
-and you decide whether that matters.
+recreated empty and the generation check is redundant there. It earns its place in
+the other direction: a value the *shell* created and the command crate only borrows
+cannot be rebuilt by a reload, so the crate needs a way to tell "the code holding me
+changed" without throwing the borrowed value away. That is the case this pattern is
+for: the generation says the code that asked differs, and you decide whether that
+matters.
 
 ## Theory: why this is not a global in the bad sense
 
