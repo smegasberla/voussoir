@@ -55,7 +55,9 @@ payoff for keeping the command thin:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use voussoir::serde_json::json;
+    // The commands crate depends on serde_json alone, so this is the direct
+    // import; `voussoir::serde_json` would not resolve here.
+    use serde_json::json;
 
     #[test]
     fn greet_uses_the_supplied_name() {
