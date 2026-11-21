@@ -175,15 +175,31 @@ In `native/commands/src/lib.rs`, add the function and put it in the table:
 
 ```rust
 fn save(payload: &Value) -> Result<Value, String> {
-    let text = payload.get("text").and_then(Value::as_str).unwrap_or("");
+    let text = payload
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     Ok(json!({ "bytes": text.len() }))
 }
 
 pub static COMMANDS: &[Command] = &[
-    Command { name: "greet", kind: Kind::Sync,  run: greet },
-    Command { name: "save",  kind: Kind::Async, run: save },
+    Command {
+        name: "greet",
+        kind: Kind::Sync,
+        run: greet,
+    },
+    Command {
+        name: "save",
+        kind: Kind::Async,
+        run: save,
+    },
 ];
 ```
+
+The scaffold's table is written one field per line, exactly like this, and there
+is a reason: `voussoir build` parses those `name: "…"` literals to check that every
+command the frontend calls actually exists. Keep the shape and the check keeps
+working.
 
 The table already exists above `greet`, with `greet` in it; you are adding one
 entry, not writing the list from scratch. `Command`, `Kind` and `COMMANDS` are
