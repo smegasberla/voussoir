@@ -107,9 +107,13 @@ Two differences matter in practice:
   before `UIApplicationMain` runs, so the shell asks for the first window through
   the same path a command uses and gets it once the loop is up. App code and the
   `on_ready` contract are identical.
-- **Some features report unsupported.** Menus, dialogs, tray and the updater's
-  endpoint fetch say so in their error rather than silently doing nothing. Branch
-  on `voussoir.platform` for the affordance, never on the error.
+- **Some features report unsupported, and one does not.** `dialog.*` returns an
+  error on iOS ("not available on iOS yet"), the tray setters refuse because
+  `TRAY_IS_LIVE` is false, and `update.check`'s fetch fails with a message saying
+  the App Store owns updates. **Menus are the exception:** `menu::build` returns a
+  handle that just stores the groups, and `attach` is a no-op, so declaring a menu
+  on iOS succeeds and renders nothing. Branch on `voussoir.platform` for the
+  affordance rather than waiting for an error that will not come.
 
 ## Theory: why hot reload does not exist on mobile
 
