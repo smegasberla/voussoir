@@ -43,6 +43,22 @@ Four possible outcomes, and all four are normal:
 | endpoint is newer | `{configured: true, current, latest, available: true, ...}` |
 | endpoint is invalid | `kind: "handler"` with a message naming the problem |
 
+**`current` is not your app's version.** It is `env!("CARGO_PKG_VERSION")` evaluated
+inside the `voussoir` crate, so it reports the framework's version (0.2.0), not the
+`version` in your own `Cargo.toml`. `env!` is resolved by the compiler in the crate
+that contains it, and the crate that contains it here is `voussoir`, not yours.
+
+That makes `available` a comparison between the framework's version and your feed,
+which is almost never what you want. Two honest options:
+
+| You want | Do this |
+| --- | --- |
+| to know a new app version exists | write your own check: a command that fetches the same JSON and compares against your own version |
+| the built-in to be meaningful | keep the feed's shape and treat `latest` as data, ignoring `available` |
+
+Passing your own version in is not possible: `UpdateConfig::from_config` takes the
+string, but the only caller is `register`, which supplies the crate's constant.
+
 **Why "not configured" is a success, not an error:** an app should be shippable
 before its update feed exists, and a first-run error dialog about a missing
 endpoint teaches users to ignore error dialogs. The command answers honestly and
