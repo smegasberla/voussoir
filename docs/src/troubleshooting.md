@@ -67,7 +67,7 @@ the terminal looks healthy. Devtools is the only place the page's error appears.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `could not compile <random crate>` | disk space ran out mid-build | free space; `doctor` does not check this |
+| `could not compile <random crate>` | disk space ran out mid-build | free space; `build` pre-checks 1.5 GB, `dev` does not |
 | `error: linker not found` | no C toolchain | install `build-essential` / Xcode CLT / MSVC build tools |
 | binary is huge | a debug build | `voussoir build` (release) rather than `--debug` |
 | `package` fails on the icon | wrong format or size | 256×256 PNG, or `.icns` on macOS |
@@ -78,10 +78,12 @@ The disk-space entry is real and confusing: running out mid-link produces an
 error naming whichever crate happened to be compiling, which looks like a code
 problem. Delete `target/` first if the errors make no sense.
 
-**No tool checks disk space for you.** `voussoir doctor` verifies tools and project
-files, not free bytes, so a full disk reaches you as a nonsense compiler error.
-`du -sh target/` is the quickest confirmation; a release build of this stack can
-take a few gigabytes with dependencies.
+**Where the check does and does not run.** `voussoir build` refuses to start with
+under 1500 MB free and says so in a sentence that names the number, because running
+out mid-link produces an error naming whichever crate happened to be compiling.
+`voussoir dev` does not run that check, and neither does `doctor`, so a `dev` session
+on a nearly full disk still reaches you as a nonsense compiler error. `du -sh target/`
+is the quickest confirmation; this stack's `target/` reaches a few gigabytes.
 
 ## Page and security
 
