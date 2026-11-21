@@ -22,15 +22,19 @@ written as if the types are true.
 ## A typed command
 
 ```rust
+// `voussoir` re-exports serde, so an app never adds serde to its own
+// Cargo.toml. That is also why each derive needs the `crate` attribute below.
 use voussoir::serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
+#[serde(crate = "voussoir::serde")]
 struct EchoArgs {
     text: String,
     repeat: Option<u32>,
 }
 
 #[derive(Serialize)]
+#[serde(crate = "voussoir::serde")]
 struct EchoReply {
     text: String,
     count: u32,
@@ -54,6 +58,13 @@ runs; the page gets:
 ```json
 {"error": {"message": "...", "kind": "payload", "method": "echo"}}
 ```
+
+**`#[serde(crate = "voussoir::serde")]` is not optional.** A derive macro generates
+paths like `::serde::Deserializer`, which resolve only if `serde` is a direct
+dependency. Your app depends on `voussoir` alone (the scaffold's `Cargo.toml` has no
+serde line), so the derive has to be told where the crate lives. Without the
+attribute the error is `could not find serde in the crate root`, which reads like a
+missing dependency and is not one.
 
 **Read the three parts of `EchoArgs` carefully, because they teach the whole
 model:**
@@ -103,8 +114,14 @@ few lines, and the logic underneath is what changes often.
 ## Async typed commands
 
 ```rust
+// Requires the `rt` feature: voussoir = { features = ["full", "rt"] }
 App::new().async_fn("lookup", |_app, args: LookupArgs| async move {
-    let row = db.get(args.id).await?;
+    // `?` needs a From impl; Error has none for io::Error, and a database
+    // error is not one either, so convert explicitly and say what failed.
+    let row = db
+        .get(args.id)
+        .await
+        .map_err(|e| Error::Handler(format!("lookup failed: {e}")))?;
     Ok(row)
 })
 ```
