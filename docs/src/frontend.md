@@ -1,43 +1,80 @@
 # The frontend
 
-The page half of a Voussoir app has no framework and no required build step
-beyond Bun. This chapter explains what Bun does with your files, what the shim
-gives you, and which patterns work when your "browser" is a webview that cannot
-navigate anywhere.
+The page half of a Voussoir app is ordinary HTML, CSS and TypeScript, bundled by
+Bun and rendered by the operating system's webview. There is no framework
+requirement and no second build system.
 
-## Theory: what Bun does, and what it does not
+This chapter explains what Bun does with your files, what the shell injects into
+every page, and which habits to drop because your "browser" has no address bar.
 
-`voussoir dev` and `voussoir build` both run one command:
+## Theory: why the page is a page and not a widget toolkit
+
+You could build the interface with native widgets: a real GTK or Cocoa button for
+each button in your design. You would get perfect platform integration and perfect
+fonts, and you would write every layout three times.
+
+Using HTML inverts that. One layout renders on all platforms, CSS gives you the
+flexibility people have spent twenty years building tooling for, and the webview
+handles text rendering, scrolling and accessibility for you.
+
+What it costs, stated plainly:
+
+| You get | You give up |
+| --- | --- |
+| one layout for every OS | pixel-identical rendering across engines |
+| every CSS technique on the web | the "real native widget" feel some users expect |
+| hot reload in development | a browser with navigation, tabs, or cookies |
+| TypeScript for the UI | any Node.js API in the page |
+
+The last row of the right column is the one that surprises people, and it is
+covered later in this chapter.
+
+## How Bun builds your files
+
+`voussoir dev` and `voussoir build` both run the same underlying command:
 
 ```
 bun build index.html --outdir dist --target browser
 ```
 
-That single line is the whole frontend pipeline. Bun reads `index.html`, follows
-`<script src>` and `<link rel="stylesheet">`, resolves the TypeScript/JSX/CSS
-those files import, and writes a `dist/` of plain, browser-ready files. Release
-builds add `--minify`.
+Release builds add `--minify`. That is the entire frontend pipeline.
 
-What this means in practice:
+What that one line actually does, step by step, because "the bundler handles it"
+is not an explanation:
 
-- **TypeScript needs no config.** No `tsconfig.json` is required for bundling;
-  Bun strips types and bundles. You add a `tsconfig.json` only if you want type
-  checking in your editor, which is a separate concern.
-- **You can import CSS from a script** (`import "./style.css"`), and it lands as
-  a real stylesheet.
-- **There is no `node_modules` in a release build.** Dependencies you import are
-  bundled in. Node built-ins do not exist in the webview, so a library that
-  requires `fs` will fail at runtime, not at build time.
-- **The entry is HTML, not JS.** That is why `voussoir.json` needs an `entry`
-  naming a page rather than a script.
+1. **Bun reads the entry HTML.** That is `voussoir.json`'s `entry`, `index.html`
+   by default. HTML is the entry, not a script.
+2. **It follows references.** Every `<script src>` and `<link rel="stylesheet">`
+   in that HTML is read, and then every `import` inside those files, recursively.
+3. **It resolves and transpiles.** TypeScript types and JSX are stripped; `.css`
+   files imported from a script become real stylesheets in the output.
+4. **It writes `dist/`.** Plain JavaScript, CSS and copied assets, with import
+   paths rewritten so the browser can follow them.
+5. **The same CLI call turns `dist/` into `native/src/assets.rs`**, a Rust table of
+   `(path, bytes)` pairs. That file is what gets compiled into the binary.
 
-`dist/` is then turned into `native/src/assets.rs` by the same command, so the
-bundled files are what the binary embeds. You never copy `dist/` anywhere.
+Step 5 is the one with no equivalent in web development: **`dist/` is not shipped.**
+It exists for a moment so the asset table can be generated from it. You never copy
+it anywhere, and deleting it changes nothing.
 
-## The shim: what `window.voussoir` is
+### What this means in practice
 
-Before any of your scripts run, the shell injects a small JavaScript file into
-every page. It defines one global:
+- **TypeScript needs no configuration to build.** Bun strips types; it does not
+  check them. The scaffold writes a `tsconfig.json` for your *editor*, not for the
+  build. A build can succeed while `bun tsc --noEmit` reports errors.
+- **Dependencies are bundled in.** A library you import ends up inside the output.
+  There is no `node_modules` at runtime and no module loader resolving packages
+  from disk.
+- **Node built-ins do not exist in the page.** `import fs from "node:fs"` may
+  bundle, but calling it fails in the webview. File access is a Rust command, by
+  design: it is visible, testable, and subject to the allowlist.
+- **The output is served from memory.** The shell answers requests for your origin
+  out of the embedded table, so there is no server process and no filesystem read.
+
+## Theory: what the shim is, and why it is injected
+
+Before any of your code runs, the shell injects a small JavaScript file into every
+page and every frame. It defines exactly one global:
 
 ```ts
 window.voussoir = {
@@ -46,203 +83,277 @@ window.voussoir = {
   windows,     // the open window labels
   tray,        // { tooltip, checked, popup }
   menu,        // { checked }
-  platform,    // "linux" | "windows" | "macos" | "android" | "ios" | ...
+  platform,    // "linux" | "windows" | "macos" | "bsd" | "android" | "ios"
   pageOrigin,  // the origin this page is really served from
+  timeout,     // the default command deadline, in ms
   protocol,    // the shim's own version, for feature detection
-  timeout,     // the default command deadline in ms
 };
 ```
 
-Nothing imports it and nothing installs it. It is also not a DOM element and not
-a module: it exists on `window` before your first line of code.
+It is not a module. Nothing imports it, nothing installs it, and it is not a DOM
+element. It exists on `window` before your first statement, which is why
+`voussoir.d.ts` can declare it and TypeScript can check your usage without any
+import.
 
-**Why a shim rather than exposing the transport directly?** There are two
-transports (a custom protocol on desktop and iOS, a `postMessage` bridge on
-Android). The shim is the one place that knows which, so page code calls
-`invoke` and never learns which platform it is on.
+**Why a shim, rather than exposing the transport directly?** There are two
+transports, and they are genuinely different:
 
-### `invoke`
+- **Desktop** uses a custom protocol: `invoke` is an HTTP POST to
+  `voussoir://localhost/__voussoir/<method>`, answered directly.
+- **Android** cannot receive a request body through that mechanism, so calls go over
+  `window.ipc` to a native handler and the answer comes back on a later event-loop
+  turn.
+
+The shim is the only code that knows which one it is on. Page code calls `invoke`
+and never learns the platform.
+
+**A detail that matters for security:** the shim checks `originAllowed()` first. If
+the page is not on an allowed origin, it deletes `window.voussoir` and refuses. A
+page that somehow got loaded from a foreign origin has no bridge at all, rather
+than a bridge that rejects each call.
+
+## `invoke`: the one call
 
 ```ts
 const value = await window.voussoir.invoke<T>("method", payload, options?);
 ```
 
-- Resolves to whatever the Rust handler returned inside `Ok`.
-- Rejects with `{ kind, method, message }` on failure. `kind` is the part you
-  branch on; see [Errors the page can branch on](errors.md).
-- `options.timeout` overrides the deadline for one call, in milliseconds. `0`
-  means no deadline.
+- **Resolves** to whatever the Rust handler returned inside `Ok`.
+- **Rejects** with an `Error` carrying `kind`, `method` and `message`. `kind` is
+  the part you branch on; every value is listed in
+  [Errors the page can branch on](errors.md).
+- **`options.timeout`** overrides the deadline for this one call, in milliseconds.
+  `0` means no deadline.
 
-The payload is serialized with `JSON.stringify`, so it must be JSON-serializable.
-A `Map`, a `Date` or a class instance will not survive; send a plain object or an
-ISO string.
+Three behaviours worth knowing before they surprise you:
 
-### `listen`
+**The payload is serialized with `JSON.stringify`.** A `Map`, a `Date`, a `Set` or a
+class instance does not survive the trip and arrives as `{}` or a string. Send plain
+objects, arrays, numbers, strings, booleans and `null`.
+
+**`invoke<T>` is an assertion, not a check.** TypeScript cannot see across the
+boundary. `invoke<string>` tells your editor what to expect; if Rust returns a
+number, you get a number at runtime and a lie in your types. Keeping payload types
+in sync with the Rust struct is your job, which is why
+[Typed commands](typed-commands.md) exists.
+
+**A timeout rejects the promise but does not cancel the handler.** The work may
+still be running and may still write. Do not retry a `timeout` blindly.
+
+### Why a promise, and not a callback
+
+Every command is asynchronous from the page's point of view, even a synchronous
+Rust function: the request has to cross into the shell. A callback would push error
+handling into a second argument everyone forgets, so the API returns a promise and
+`try`/`catch` works the way a JavaScript reader already expects.
+
+## `listen`: the other direction
 
 ```ts
 const off = window.voussoir.listen<{ dark: boolean }>("theme", (payload) => {
   document.documentElement.dataset.theme = payload.dark ? "dark" : "light";
 });
 
-// later
+// later, when the component goes away
 off();
 ```
 
-`listen` returns its own unsubscribe function, which matters because the page can
-outlive your component. Rust reaches this with `app.emit("theme", ...)` or
-`app.emit_to(Some("main"), ...)`.
+`listen` returns its own unsubscribe function. Rust reaches it with
+`app.emit("theme", ...)` (every window) or `app.emit_to(Some("main"), ...)` (one).
 
-The event name is a plain string, and nothing validates it on either side. A typo
-produces a listener that never fires, with no error. Keep event names in one
-place in your own code.
+**Event names are plain strings and nothing validates them.** A typo on either side
+produces a listener that never fires, with no error anywhere. Two habits prevent
+that: define names as constants in one module, and add a test that asserts a
+listener fires for the name Rust emits.
 
-### Platform detection
+**And an event can arrive before you are listening.** Delivery works by evaluating
+a script in the webview, with a guard that does nothing if the shim is not there
+yet. There is no queue. That is why initial state is emitted from `on_ready`, which
+fires after your page has loaded, and not from `main`. See
+[Lifecycle hooks](lifecycle.md).
+
+## Platform detection, and what to do with it
 
 ```ts
 if (window.voussoir.platform === "android") {
-  // no tray, no menu bar
+  // the menu bar does not exist here
 }
 ```
 
-Use this for **affordances**, not for behaviour. A command behaves the same
-everywhere; a tray icon does not exist on iOS, and Android has no menu *bar*. It
-does have a menu: the same groups are raised as a `PopupMenu` on demand, through
-`window.voussoir.invoke("__voussoir_show_menu")`, because Android expects app
-chrome (an overflow button or a drawer) rather than OS chrome.
+Use this for **affordances**, never for behaviour. A command behaves the same on
+every platform. Where the UI differs:
 
-So the branch is about where the affordance lives, not whether it exists. Branch
-where the UI differs, never around `invoke`.
+| Capability | Windows | macOS | Linux | Android | iOS |
+| --- | --- | --- | --- | --- | --- |
+| menu bar | yes | yes | yes | no, raised as a `PopupMenu` | no |
+| tray icon | yes | yes | yes | posted notification, not editable | no |
+| multiple windows | yes | yes | yes | no | no |
+| devtools | yes | yes | yes | no | no |
 
-### Feature detection
+The Android menu is the row people get wrong in both directions. There is no menu
+*bar*, because the platform expects app chrome (an overflow button or a drawer)
+rather than OS chrome. But the same menu groups exist and are raised on demand:
+
+```ts
+// Android only: show the app's menu at the current position.
+await window.voussoir.invoke("__voussoir_show_menu");
+```
+
+So the branch is about *where the affordance lives*, not whether it exists. Hide a
+button that cannot work; do not hide a capability that is merely spelled
+differently.
+
+## Feature detection with `protocol`
 
 ```ts
 if (window.voussoir.protocol >= 2) {
   const open = await window.voussoir.windows();
 }
+if (window.voussoir.protocol >= 3) {
+  const base = window.voussoir.pageOrigin;
+}
 ```
 
 `protocol` is the shim's version, not the crate's, so it changes only when the
-page-visible API does. Each guard names the version that introduced the member it
-protects: `windows()` arrived in 2, `pageOrigin` in 3. The current version is 3.
+page-visible API does. Version 2 added `windows()`, `tray` and `menu`; version 3
+added `pageOrigin`. The current version is **3**.
 
-**Why detect a version rather than check for the member?** Both work, and they
-answer different questions. `if (voussoir.tray)` asks "is this one thing here" and
-is right for a single optional member. The version asks "what shape is this
-object" and is right when you use several members together, because one guard then
-covers all of them.
+**Why detect a version rather than check for the member?** They answer different
+questions. `if (voussoir.tray)` asks "is this one thing here", which is right for a
+single optional member. The version asks "what shape is this object", which is right
+when you use several members together, because one guard covers all of them.
 
 ## Theory: the page cannot navigate, and that is a feature
 
-In a normal web app, `window.location = "https://example.com"` leaves your code
-and loads someone else's. In a Voussoir app that navigation is **refused by the
-shell** and recorded, because there is no back button and no address bar: the
+In a normal web app, setting `window.location` leaves your code and loads someone
+else's. In a Voussoir app that navigation is **refused by the shell** and recorded
+as a `[security]` entry, because there is no back button and no address bar: the
 user would be stranded in a page that is not your app.
+
+The reason it is a refusal rather than a nuisance is authority. Your page can call
+your commands. If it could navigate to a remote page, that remote page would inherit
+a bridge into your app's filesystem access. Refusing navigation is what keeps the
+authority attached to code you wrote.
 
 Practical consequences:
 
 | You want to… | Do this |
 | --- | --- |
-| Show a web page | `window.open(url)` / let the shell hand it to the OS browser |
-| Link to docs | an `<a target="_blank">`, which the shell opens externally |
-| Change views | render a different view in the same document |
+| show a web page | `<a target="_blank">`, which the shell hands to the OS browser |
+| link to your own docs page | `target="_blank"` as well, or a second window |
+| change views | render a different view in the same document |
+| load another bundled page | a relative link; it is the same origin |
 
-A relative link inside your bundled assets still works: it is the same origin. A
-link to `https://…` does not. See [Security model](security.md).
+## Theory: routing without a router
 
-## Routing without a router
+Because navigation is refused, a client-side router must never assign to
+`location`. Most router libraries assume a URL; yours has no URL. Two patterns that
+work:
 
-Because navigation is refused, a client-side router must not assign to
-`location`. Two patterns that work:
+**In-memory views**, the common choice:
 
 ```ts
-// 1. History-less: keep the view in memory.
-let view: "list" | "detail" = "list";
+type View = "list" | "detail";
+let view: View = "list";
+
 function render() {
-  document.querySelector("#app")!.innerHTML =
-    view === "list" ? listHtml() : detailHtml();
+  root.innerHTML = view === "list" ? listHtml() : detailHtml();
 }
 ```
 
-```html
-<!-- 2. Real navigation inside the app: these URLs are same-origin. -->
-<a href="/settings.html">Settings</a>
+A tiny store plus a `render()` function is enough for most apps, and it has no
+dependency, no history, and nothing to break when a user presses a key you did not
+anticipate.
+
+**One page per window**, when views are truly separate documents:
+
+```ts
+await window.voussoir.invoke("open_settings");
 ```
 
-Pattern 2 works because the assets are embedded: `/settings.html` is served from
-`voussoir://localhost`, so it is not a foreign origin. It costs a full page load,
-which loses in-memory state, so it suits window-level pages rather than tabs.
+A second window has its own document, its own memory, and its own allowlist. That
+is the closest thing to a route, and it is a stronger boundary than a route: a
+window can be denied commands the main window has. See
+[Multi-window](multi-window.md).
 
-## Communicating in the other direction
+## Theory: pull or push, and how to choose
 
-Rust pushes with events; the page pulls with commands. The choice is about who
-knows the state changed:
+Rust can push (events) and the page can pull (commands). The right answer is decided
+by **who finds out first**:
 
-- **Pull** when the page asks ("what is the current document?"). Retry and error
-  handling stay in one place.
-- **Push** when Rust knows first (a file changed on disk, a timer fired). Use
-  `app.emit_to(...)` from `on_ready` to seed the page, then events for updates.
+- **Pull** when the page decides it needs something: "what is the current document?"
+  Retry and error handling stay in one place, and nothing happens while the user is
+  not looking.
+- **Push** when Rust knows first: a file changed on disk, a timer fired, a menu item
+  was clicked. The page cannot poll for a fact it does not know exists.
 
-Never poll from `on_ready` with a timer: the page can ask, and a timer eventually
-races the window closing. [Lifecycle hooks](lifecycle.md) has the ordering
-guarantees.
+The mistake to avoid is seeding the page from `main`. That is a push before anyone
+is listening, and it is silently dropped. Seed from `on_ready`:
 
-## TypeScript types across the boundary
+```rust
+App::new().on_ready(|app, label| {
+    app.emit_to(Some(label), "boot", json!({ "theme": "dark" }));
+})
+```
 
-`invoke<T>` and `listen<T>` are your assertions, not checks. Rust does not send
-types and cannot enforce them. Two habits keep this honest:
+## Types across the boundary
 
-1. Define the payload shape next to the Rust struct it mirrors, and change both
-   in one commit.
-2. Prefer a typed Rust command (`command_typed`) so a bad shape fails on the Rust
-   side with `kind: "payload"` instead of reaching your handler as a surprise.
-   See [Typed commands](typed-commands.md).
+`invoke<T>` and `listen<T>` are notes to your editor. Rust cannot enforce them,
+because JSON does not carry types. Two habits keep the two sides honest:
 
-`voussoir init` writes `src/voussoir.d.ts`, which declares `window.voussoir` for
-the editor. It is a convenience file: if it drifts, the runtime is unaffected.
+1. **Define the payload shape next to the Rust struct it mirrors**, and change both
+   in one commit. A comment naming the Rust type is worth more than a clever
+   generic.
+2. **Prefer a typed Rust command** (`command_typed`) so a wrong shape fails on the
+   Rust side with `kind: "payload"`, naming the command and the field, instead of
+   reaching your handler as a missing value.
+
+`voussoir init` writes `src/voussoir.d.ts`, which declares `window.voussoir` for the
+editor. It is a convenience: if it drifts, the runtime is unaffected and your types
+are merely wrong, which is still worth avoiding.
 
 ## Assets and URLs
 
-- Reference assets relatively (`./logo.png`), not with an absolute origin.
-- Inline small images as `data:` URLs where the CSP allows it; the policy permits
-  `data:` and `blob:` for `img-src`.
-- On Windows the origin string differs from the other desktop platforms, so an
-  absolute URL built from a literal is wrong there. Use `pageOrigin` if you truly
-  need one: [The two origins](origins.md).
+- **Reference assets relatively** (`./logo.png`). Absolute URLs are correct on four
+  platforms and wrong on Windows, where the origin is rewritten.
+- **`data:` and `blob:` images are allowed** by the release policy, so inlining a
+  small icon is fine.
+- **Build absolute URLs from `pageOrigin`** when you truly need one, never from a
+  literal.
 
-## What is not available
+## What the page deliberately cannot do
 
-| Missing | Why | Alternative |
+| Missing | Why | What to do instead |
 | --- | --- | --- |
-| Node built-ins (`fs`, `path`) | there is no Node in the webview | a Rust command |
-| Remote script tags | the CSP forbids them | bundle the dependency |
-| `eval` / `new Function` | the CSP forbids them | ship the code |
-| Cross-origin `fetch` | `connect-src 'self'` | a Rust command does the fetch |
-| Cookies for a remote origin | there is no remote origin | `storage.*` commands |
+| `fs`, `path`, `process` | there is no Node runtime | a Rust command |
+| remote `<script src>` | the release CSP allows `script-src 'self'` | bundle the dependency |
+| `eval`, `new Function` | the release CSP has no `unsafe-eval` | ship the code |
+| `fetch` to another host | `connect-src 'self' voussoir:` | a Rust command performs the request |
+| remote cookies | there is no remote origin | the `storage.*` commands |
+| `<form action="...">` posting out | `form-action 'none'` | handle `submit` and call a command |
+| being framed by another page | `frame-ancestors 'none'` | nothing; this is a defence |
 
-Every row is a deliberate trade: the page has less reach, and Rust has the
-authority. If you find yourself fighting this list, the feature belongs in Rust.
+Every row is the same trade: the page has less reach, and Rust holds the authority.
+If you find yourself fighting this list, the feature belongs in Rust.
 
-## Theory: what a frontend without navigation costs you
+**One exception worth knowing:** in a dev build the CSP is relaxed, because Bun's
+hot-reload client uses inline scripts and an eval-based module loader. Code can
+therefore work under `voussoir dev` and fail in a release build. If something breaks
+only after `voussoir build`, check this table first.
 
-Most web advice assumes a router, a URL bar and a back button. All three are
-absent, and the absence is not a limitation to work around but a property to
-design with:
+## What it does not do
 
-| Web habit | What replaces it | Why |
-| --- | --- | --- |
-| Routes and URLs | in-memory view state, or a second window | a URL nobody can type is not a route |
-| Back button | your own Back control | the shell owns chrome, not history |
-| Deep links | `on_ready` plus a command that reads an argument | launch arguments are the only input |
-| Reload to recover | `__voussoir_reports`, or a restart button | there is no reload button the user can press |
-
-The last row surprises people: the shell binds no reload shortcut, and there is no
-address bar to retype. That is why a page that gets into a bad state should offer
-its own reset, and why `verify.ts` asserts that a panicking command leaves the
-window alive. `bun scripts/verify.ts` also asserts the panic boundary directly, so
-"the window survives" is measured rather than assumed.
+- **No server-side rendering, no hydration.** The page is static files plus your
+  JavaScript; there is no Node process at build or runtime to render HTML.
+- **No code splitting you can rely on.** Everything is embedded, so lazy `import()`
+  saves no download; it only defers execution.
+- **No service worker.** There is no network origin to intercept and nothing to
+  cache; the assets are already local.
+- **No `postMessage` contract of your own.** Use commands and events, which have
+  error handling and are visible to diagnostics.
 
 ## Next
 
-- [Commands & payloads](ipc-contract.md) — the contract `invoke` speaks.
-- [Storage](storage.md) — small persistent state without a database.
-- [The two origins](origins.md) — why the origin string differs by platform.
+- [Commands & payloads](ipc-contract.md) — the contract behind `invoke`.
+- [Errors the page can branch on](errors.md) — every rejection you can receive.
+- [The two origins](origins.md) — why the origin string differs on Windows.
