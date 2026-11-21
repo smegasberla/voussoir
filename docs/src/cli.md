@@ -15,8 +15,8 @@ swapped into a running process. A hand-rolled setup gets these three right the f
 time and then drifts, and the drift shows up as a blank window, a stale page, or a
 command that "does not exist" until you restart.
 
-The CLI is that meeting point, and nothing more. It is deliberately thin: nine
-commands, eleven subcommands, each a wrapper over a tool you could invoke yourself.
+The CLI is that meeting point, and nothing more. It is deliberately thin: eight
+commands and five subcommands, each a wrapper over a tool you could invoke yourself.
 That is a design constraint worth knowing, because it tells you what to do when a
 flag you want is missing: call the underlying tool directly, and tell the CLI about
 the result through `voussoir.json` or an environment variable.
