@@ -102,13 +102,26 @@ the app, not of the framework. Two habits:
 
 - **Handler messages are for users.** "The file could not be saved: permission
   denied" beats "os error 13".
-- **Detail goes in the log.** If you need the raw error, record it with
-  `voussoir::reporting::record(&format!("{e}"), "save")`, which lands in the report
-  buffer and on stderr. Do not paste both into one string.
+- **Detail goes in the log, not in the message.** Do not paste both into one string.
 
-`App::report_log(path)` is a different thing and worth not confusing with it: it
-chooses *where* reports are written. Without it, reports are still kept in memory
-and readable through `__voussoir_reports`; they are just not persisted.
+There is no public `record` function to call: the reporting module is private, and
+the three seams that exist are all methods or commands, on purpose.
+
+| You want | Use |
+| --- | --- |
+| to read reports from the page | the `__voussoir_reports` command |
+| to forward every report to your own collector | `App::report_sink(\|line\| ...)` |
+| to persist reports to a file | `App::report_log(path)` |
+
+```rust
+App::new()
+    .report_log("/tmp/notes-reports.log")
+    .report_sink(|line| eprintln!("[notes] {line}"))
+```
+
+`report_sink` is called from the panic hook, so the closure must not panic and must
+not block for long. Without `report_log` reports are still kept in memory and
+readable through `__voussoir_reports`; they are just not persisted.
 
 ## Retrying: the only kind worth retrying
 

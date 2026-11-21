@@ -91,9 +91,14 @@ App::new()
             .map_err(|e| Error::Handler(format!("could not read {path}: {e}")))?;
         Ok(json!(text))
     })
-    // A real async fn on the shared runtime.
+    // A real async fn on the shared runtime (needs the `rt` feature).
+    // `?` will not do here either: `Error` implements `From` for wry's error
+    // only, so a database error has to be converted and named.
     .async_fn("lookup", |_app, payload| async move {
-        let row = db.get(payload).await?;
+        let row = db
+            .get(payload)
+            .await
+            .map_err(|e| Error::Handler(format!("lookup failed: {e}")))?;
         Ok(json!(row))
     })
 ```
