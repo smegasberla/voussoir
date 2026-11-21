@@ -79,6 +79,36 @@ that makes an app desktop-only by accident.
 the origin and the policy are the desktop ones. This is deliberate: it is the one
 mobile platform where the insecure-by-default `http://` workaround is not needed.
 
+## Table: which origin each target serves from
+
+| Target | Engine | Origin the page runs on | Why |
+| --- | --- | --- | --- |
+| Linux, BSD | WebKitGTK | `voussoir://localhost` | the custom scheme can be intercepted |
+| macOS | WKWebView | `voussoir://localhost` | `WKURLSchemeHandler` exists |
+| Windows | WebView2 | `http://voussoir.localhost` | WebView2 cannot intercept a custom scheme, so the host form is rewritten and intercepted |
+| Android | system WebView | `http://voussoir.localhost` | same limitation |
+| iOS | WKWebView | `voussoir://localhost` | `WKURLSchemeHandler` exists |
+
+So the answer to "which origin am I on" is not "the mobile one" or "the desktop
+one"; it is a property of the engine, and the two mobile platforms differ from each
+other.
+
+## The check behind all of this
+
+`navigation_allowed` compares whole origins, then allows a path under one:
+
+```rust
+[APP_ORIGIN, REWRITTEN_APP_ORIGIN]
+    .iter()
+    .any(|origin| url == *origin || url.starts_with(&format!("{origin}/")))
+```
+
+The `format!("{origin}/")` in the prefix is the whole trick. Testing
+`starts_with(APP_ORIGIN)` would accept `voussoir://localhost.evil.com`, whose text
+begins with the right characters and whose host is somebody else's. There is a unit
+test named `prefix_match_does_not_leak_across_hosts` that pins exactly that case, so
+the bug cannot come back quietly.
+
 ## Theory: why not unify the spellings
 
 Because each engine's constraint is different, and hiding the difference would
