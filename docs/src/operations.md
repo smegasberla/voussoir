@@ -30,19 +30,23 @@ Each is measured rather than asserted:
 
 ### `verify.ts`
 
-Boots a real window on the real IPC path and asserts the things the book
-guarantees:
+Boots a real window on the real IPC path and asserts, by name:
 
-- the page cannot run remote script, `eval`, or a remote `fetch`,
-- navigation does not leave the app,
-- a panicking handler produces an error envelope and the window survives,
-- `storage` round-trips, and refuses past 4 MB,
-- the multi-window contract: labels, listing, closing, and a narrowed window's
-  denial,
-- the release tree has no `libloading` edge and no JS runtime.
+- the shell's unit tests pass, as a precondition for anything below,
+- an embedded page round-trips and an emitted event reaches it,
+- `voussoir init` scaffolds a project that builds,
+- the artifact exists and is **under 8 MB**,
+- no `libnode` or `libv8` is linked, so the shipped app has no JS runtime,
+- on Linux only, the binary links `libwebkit2gtk` and nothing else surprising,
+- a dev-mode round trip works, and a **second window narrowed by
+  `voussoir.json`** is refused the command it does not have,
+- the compiled CLI runs, and `voussoir package` produces an AppDir.
 
-It is the source of the guarantees claimed elsewhere in this book. When a chapter
-says "asserted", this is where.
+**What is not here:** the CSP, `eval` and remote-`fetch` refusals, the navigation
+veto, the panic envelope and the 4 MB storage cap are **unit tests** in the crate,
+not end-to-end checks. That distinction is deliberate: those are pure functions and
+a unit test pins them more precisely than a window can. When a chapter says
+"asserted", check [Testing](testing.md) for which harness.
 
 ### `bench.ts`
 
@@ -72,9 +76,14 @@ knowledge.
 ./scripts/coverage.sh
 ```
 
-Reports line coverage for the library's own tests and fails under a floor. The
-baseline is **67.58%**, measured with the default features and with test and fuzz
-modules excluded, so the number describes the shell rather than its assertions.
+Reports line coverage for the library's own tests and fails under a floor of
+**65%**. The measured baseline is **67.58%** (2026-11-21, default features, test and
+fuzz modules excluded), so the number describes the shell rather than its
+assertions.
+
+The gap between 65 and 67.58 is the point, not slack. `VOUSSOIR_COV_FLOOR=0
+./scripts/coverage.sh` reports without failing, which is what you want while
+investigating.
 
 ## Theory: why a floor and not a target
 
