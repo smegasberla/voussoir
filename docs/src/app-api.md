@@ -328,8 +328,10 @@ Without it, reports are still recorded in memory and readable through
 `__voussoir_reports`; they are just not persisted. `report_sink` takes a closure
 instead, for when "write to a file" is not what you want.
 
-Neither of them *records* anything. That is `voussoir::reporting::record(message,
-context)`, which the IPC layer and the panic hook call for you.
+Neither of them *records* anything, and there is no public function that does: the
+reporting module is private. The IPC layer and the panic hook record for you, and
+the three ways to read what they recorded are the `__voussoir_reports` command,
+your `report_sink` closure, and the file `report_log` names.
 
 ### `devtools(bool)`
 
