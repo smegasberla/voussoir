@@ -14,8 +14,14 @@ pub type AssetTable = &'static [(&'static str, &'static [u8])];
 
 /// Look up a URL path in the asset table.
 ///
-/// Returns `None` when nothing matches. Directory-ish paths fall back to
-/// `index.html` so the root URL works.
+/// Returns `None` when nothing matches. The root serves `index.html`, and so
+/// does a navigation path with no file extension (`/notes/42`, `/docs/`),
+/// because that is a client-side route in a bundled SPA and only the page's own
+/// router can answer it. A missing path *with* an extension (`/assets/gone.js`)
+/// is a genuinely missing asset and stays a miss, so a broken script import is
+/// reported as a 404 rather than as HTML the parser rejects.
+///
+/// The table is the only thing consulted, so a path still cannot escape it.
 pub fn lookup<'a>(assets: AssetTable, path: &str) -> Option<(&'a str, Cow<'a, [u8]>)> {
     let path = if path.is_empty() || path == "/" {
         "/index.html"
@@ -24,6 +30,20 @@ pub fn lookup<'a>(assets: AssetTable, path: &str) -> Option<(&'a str, Cow<'a, [u
     };
     let path = path.trim_start_matches('/');
 
+    if let Some(hit) = find(assets, path) {
+        return Some(hit);
+    }
+    // A route, not a file: no extension, and no `..` segment that would make it
+    // a traversal attempt rather than a route.
+    let leaf = path.rsplit('/').next().unwrap_or("");
+    let is_route = !leaf.contains('.') && !path.split('/').any(|segment| segment == "..");
+    if is_route {
+        return find(assets, "index.html");
+    }
+    None
+}
+
+fn find<'a>(assets: AssetTable, path: &str) -> Option<(&'a str, Cow<'a, [u8]>)> {
     assets
         .iter()
         .find(|(name, _)| *name == path)
@@ -76,6 +96,20 @@ mod tests {
     #[test]
     fn nested_paths_resolve() {
         assert_eq!(lookup(ASSETS, "/assets/app.js").unwrap().0, "assets/app.js");
+    }
+
+    #[test]
+    fn a_client_side_route_serves_index() {
+        assert_eq!(lookup(ASSETS, "/notes/42").unwrap().0, "index.html");
+        assert_eq!(lookup(ASSETS, "/docs/").unwrap().0, "index.html");
+        assert_eq!(lookup(ASSETS, "/settings/about").unwrap().0, "index.html");
+    }
+
+    #[test]
+    fn a_missing_asset_stays_a_miss() {
+        assert!(lookup(ASSETS, "/assets/gone.js").is_none());
+        assert!(lookup(ASSETS, "/missing.css").is_none());
+        assert!(lookup(ASSETS, "/logo.png").is_none());
     }
 
     #[test]

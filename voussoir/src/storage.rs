@@ -203,8 +203,13 @@ impl Shared {
         }
     }
 
-    /// The store for this app, opening it once and remembering the result so a
-    /// failed open is not retried on every command.
+    /// The store for this app, opened once and then reused.
+    ///
+    /// A *failed* open is deliberately not remembered: `Store::open` creates the
+    /// directory and file, so the common failure is transient (a full disk, a
+    /// permissions change) and a later command may well survive it. Retrying
+    /// costs one failed syscall, while caching the failure would leave the store
+    /// unusable for the rest of the process after the first blip.
     fn store(&self) -> Result<&'static Store, Error> {
         let mut slot = self
             .store
