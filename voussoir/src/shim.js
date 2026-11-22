@@ -22,6 +22,16 @@
   const listeners = new Map();
   const pending = new Map();
   let nextId = 1;
+  // A page without a viewport meta renders at the browser's 980px fallback
+  // viewport on a phone, which reads as a page that slides sideways under the
+  // reader's finger. Add the meta only when the page did not declare one, so an
+  // app that pins its own scale is never overridden.
+  if (!document.querySelector('meta[name="viewport"]')) {
+    const meta = document.createElement("meta");
+    meta.name = "viewport";
+    meta.content = "width=device-width, initial-scale=1";
+    (document.head || document.documentElement).appendChild(meta);
+  }
 
   function originAllowed() {
     if (allowed.length === 0) return true;
