@@ -137,6 +137,54 @@ mod tests {
         assert_eq!(lookup(UNSORTED, "/z.js").unwrap().0, "z.js");
     }
 
+    /// Ignored by default: a measurement, not a gate. Run with
+    /// `cargo test --release --lib bench_asset_lookup -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_asset_lookup() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let mut entries: Vec<(&'static str, &'static [u8])> = (0..512)
+            .map(|i: usize| {
+                let name: &'static str = Box::leak(format!("assets/{i:03}.js").into_boxed_str());
+                (name, b"x" as &'static [u8])
+            })
+            .collect();
+        let sorted: AssetTable = Box::leak(entries.clone().into_boxed_slice());
+        entries.reverse();
+        let unsorted: AssetTable = Box::leak(entries.into_boxed_slice());
+
+        let lookups = 2_000_000u32;
+        let time = |table: AssetTable| {
+            let start = Instant::now();
+            let mut found = 0u32;
+            for i in 0..lookups {
+                let path = format!("/assets/{:03}.js", i % 512);
+                if lookup(black_box(table), black_box(&path)).is_some() {
+                    found += 1;
+                }
+            }
+            (start.elapsed(), found)
+        };
+        // Warm the branch predictor and the allocation path once.
+        let _ = time(sorted);
+        let (sorted_time, found) = time(sorted);
+        let (unsorted_time, found_unsorted) = time(unsorted);
+        assert_eq!(found, lookups);
+        assert_eq!(found_unsorted, lookups);
+        println!(
+            "binary search: {:?} total, {:.1} ns/lookup",
+            sorted_time,
+            sorted_time.as_nanos() as f64 / lookups as f64
+        );
+        println!(
+            "fallback scan: {:?} total, {:.1} ns/lookup",
+            unsorted_time,
+            unsorted_time.as_nanos() as f64 / lookups as f64
+        );
+    }
+
     #[test]
     fn a_missing_asset_stays_a_miss() {
         assert!(lookup(ASSETS, "/assets/gone.js").is_none());

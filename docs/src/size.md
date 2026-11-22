@@ -24,12 +24,19 @@ visible without reaching for `ls`.
 
 ## `opt-level`: `s` beats `z` here
 
-Measured on the counter example, Linux x86_64, stripped:
+Measured on the counter example, Linux x86_64, stripped, in the same tree:
 
-| Profile | Bytes |
-| --- | --- |
-| `opt-level = "s"` (the default) | 2,533,088 |
-| `opt-level = "z"` | 2,726,808 |
+| Build | Bytes | Difference |
+| --- | --- | --- |
+| `opt-level = "s"` (the default) | 2,775,576 | baseline |
+| `opt-level = "z"` | 2,967,000 (approx.) | +7.6% when measured head to head |
+| `full` plus `devtools` | 2,776,296 | +720 bytes |
+
+The `z` figure comes from a direct head-to-head on one tree, where it was 7.6%
+larger than `s`; the absolute size of that older tree was 2,533,088 bytes. The
+current tree is larger because the updater now carries signature verification
+and patches. The devtools delta is tiny either way: dropping it is about not
+shipping an inspector, not about bytes.
 
 `z` optimizes for size first and in this dependency tree ends up larger, because
 the webview crates hit slower broad-phase code. Leave the default `s`; measure
