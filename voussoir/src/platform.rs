@@ -224,11 +224,20 @@ pub use android::{
     complete_dialog, fail_dialog, http_get, init_activity, install_menu, pick_dialog, show_menu,
 };
 
+/// iOS has no menu bar. The desktop menu code still calls this before falling
+/// back to the page-drawn menu, so answer the same way Android does when there
+/// is nothing to install: false.
+#[cfg(target_os = "ios")]
+pub fn install_menu(_groups: &str) -> bool {
+    false
+}
+
 #[cfg(all(target_os = "android", feature = "tray"))]
 pub use android::post_notification;
 
 #[cfg(target_os = "android")]
 mod android {
+    use super::lock;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{mpsc, Mutex};
@@ -553,7 +562,7 @@ mod tests {
     fn a_lifecycle_state_with_no_handle_is_queued_not_lost() {
         // Must not panic and must not vanish: `deliver_lifecycle` keeps it.
         lifecycle("resume");
-        let queued = LIFECYCLE.lock().unwrap().drain();
+        let queued = lock(&LIFECYCLE).drain();
         assert_eq!(queued, ["resume"]);
     }
 

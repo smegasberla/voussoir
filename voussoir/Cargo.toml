@@ -47,6 +47,13 @@ futures-util = { version = "0.3", optional = true }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
 gtk = "0.18"
 
+# Signature verification, kept outside the desktop-only block: these are pure
+# Rust and compile on mobile, where the updater still checks signatures. Only
+# the transport above (`ureq`) is desktop-only.
+sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
+ed25519-dalek = { version = "2", optional = true, default-features = false, features = ["fast", "std", "zeroize"] }
+
 [features]
 default = []
 # Native menu bar with the platform's standard items (Cut/Copy/Paste/Quit).
@@ -89,9 +96,6 @@ muda = { version = "0.21", optional = true }
 tray-icon = { version = "0.26", optional = true }
 rfd = { version = "0.18", optional = true }
 ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
-sha2 = { version = "0.10", optional = true }
-base64 = { version = "0.22", optional = true }
-ed25519-dalek = { version = "2", optional = true, default-features = false, features = ["fast", "std", "zeroize"] }
 
 # On Android those features are served by `src/platform`, which talks to the
 # activity over JNI. `jni` is the binding itself; `ndk-context` is how the

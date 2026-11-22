@@ -327,7 +327,7 @@ pub(crate) fn build_shim_with(dev_origin: Option<&str>, timeout_ms: u64) -> Stri
     // http://voussoir.localhost, which wry intercepts. On Windows the rewrite is a
     // navigation to that URL, so it is the origin the page actually reports.
     #[cfg(any(target_os = "android", target_os = "windows"))]
-    origins.push(REWRITTEN_APP_ORIGIN.to_owned());
+    origins.push(crate::security::REWRITTEN_APP_ORIGIN.to_owned());
     let allowed = serde_json::to_string(&origins).unwrap_or_else(|_| "[]".to_owned());
     SHIM.replace("__INVOKE_BASE__", invoke_base(dev_origin.is_some()))
         .replace("__ALLOWED_ORIGINS__", &allowed)
