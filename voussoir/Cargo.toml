@@ -55,8 +55,8 @@ menu = ["dep:muda"]
 tray = ["dep:tray-icon", "menu"]
 # Native open/save file dialogs exposed as commands.
 dialogs = ["dep:rfd"]
-# Update checks against a JSON endpoint.
-updater = ["dep:ureq"]
+# Update checks, plus download/verify/install on desktop.
+updater = ["dep:ureq", "dep:sha2"]
 # Devtools in release builds (F12). Costs a little binary size.
 devtools = ["wry/devtools"]
 # Swap a hot-reloaded commands cdylib into the running shell (`voussoir dev`).
@@ -89,6 +89,7 @@ muda = { version = "0.21", optional = true }
 tray-icon = { version = "0.26", optional = true }
 rfd = { version = "0.18", optional = true }
 ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
+sha2 = { version = "0.10", optional = true }
 
 # On Android those features are served by `src/platform`, which talks to the
 # activity over JNI. `jni` is the binding itself; `ndk-context` is how the

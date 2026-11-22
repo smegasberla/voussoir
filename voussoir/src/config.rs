@@ -14,6 +14,12 @@ const DEFAULT_NAME: &str = "Voussoir App";
 pub struct Config {
     pub name: String,
     pub title: String,
+    /// The app's own version, used by the `updater` feature.
+    ///
+    /// `None` means the updater falls back to the framework's crate version,
+    /// which is almost never what an app's feed tracks; set this to the same
+    /// string that is in the app's own `Cargo.toml`.
+    pub version: Option<String>,
     pub width: f64,
     pub height: f64,
     /// Page loaded at startup, relative to the served root.
@@ -47,6 +53,7 @@ impl Default for Config {
         Self {
             name: DEFAULT_NAME.to_owned(),
             title: DEFAULT_NAME.to_owned(),
+            version: None,
             width: 800.0,
             height: 600.0,
             entry: "index.html".to_owned(),
@@ -75,6 +82,9 @@ impl Config {
         if let Some(name) = map.get("name").and_then(Value::as_str) {
             config.name = name.to_owned();
             config.title = name.to_owned();
+        }
+        if let Some(version) = map.get("version").and_then(Value::as_str) {
+            config.version = Some(version.to_owned());
         }
         if let Some(title) = map.get("title").and_then(Value::as_str) {
             config.title = title.to_owned();
@@ -176,6 +186,13 @@ mod tests {
         assert_eq!(Config::default().entry, "index.html");
         let c = Config::from_json(r#"{"entry":"/app/index.html"}"#).unwrap();
         assert_eq!(c.entry, "app/index.html");
+    }
+
+    #[test]
+    fn a_version_is_read_for_the_updater() {
+        let config = Config::from_json(r#"{"name":"Notes","version":"2.1.0"}"#).unwrap();
+        assert_eq!(config.version.as_deref(), Some("2.1.0"));
+        assert!(Config::default().version.is_none());
     }
 
     #[test]

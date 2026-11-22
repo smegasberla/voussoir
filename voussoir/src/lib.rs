@@ -35,7 +35,7 @@
 //! | `menu` | native menu bar with Cut/Copy/Paste/Quit, plus app items |
 //! | `tray` | system tray icon with a context menu (implies `menu`) |
 //! | `dialogs` | native open / save / folder dialogs as commands |
-//! | `updater` | update check against a JSON endpoint |
+//! | `updater` | update check, download, verify and install |
 //! | `devtools` | devtools in release builds, bound to F12 / Cmd-Alt-I |
 //! | `full` | menu + dialogs + updater + devtools |
 //!

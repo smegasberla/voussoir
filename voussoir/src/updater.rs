@@ -1,18 +1,33 @@
-//! Update checks.
+//! Update checks, and on desktop applying them.
 //!
-//! What this does: fetch a JSON document from a URL you configure, compare its
-//! version against the running app's, and hand the result to the page. What it
-//! deliberately does not do: download, verify, or install anything. Replacing a
-//! running binary is platform-specific, needs code signing to be meaningful, and
-//! is not something a framework should do silently on a user's machine.
+//! `update.check` fetches a JSON document from the URL in `update.url`, compares
+//! its version against the app's, and hands the result to the page.
+//!
+//! `update.apply` goes further: it re-fetches the same feed (never a URL the page
+//! supplies), downloads the artifact the feed names, checks its SHA-256, and
+//! renames it over the running binary. `update.relaunch` starts the installed
+//! binary and exits, and refuses unless this process installed something.
+//!
+//! Nothing is silent: the digest is mandatory, plain HTTP is accepted only on
+//! loopback, and the install only happens when the page asks for it. The digest
+//! proves the bytes match the feed; authenticity rests on TLS to the configured
+//! endpoint, which is why `https` is required.
 //!
 //! Expected endpoint shape (extra fields ignored):
 //!
 //! ```json
-//! { "version": "1.2.0", "notes": "Fixes a crash on save.", "url": "https://..." }
+//! { "version": "1.2.0", "notes": "Fixes a crash on save.",
+//!   "url": "https://example.com/app", "sha256": "…64 hex…" }
 //! ```
 //!
-//! Commands: `update.check` (async, needs `update.url` in the config).
+//! or, for one feed serving several platforms:
+//!
+//! ```json
+//! { "version": "1.2.0", "downloads": { "linux-x86_64": { "url": "…", "sha256": "…" } } }
+//! ```
+//!
+//! Commands: `update.check` (async), `update.apply` (async, desktop only) and
+//! `update.relaunch` (desktop only). All need `update.url`.
 
 use serde_json::{json, Value};
 
@@ -27,11 +42,15 @@ pub struct UpdateConfig {
 }
 
 impl UpdateConfig {
-    /// Read `update.url` out of a parsed config.
+    /// Read `update.url` and the app's own version out of a parsed config.
+    ///
+    /// The app's `version` wins over the `current` passed in, which is the
+    /// framework's crate version: a feed tracks the app, and comparing it against
+    /// the framework's version made `available` almost never true.
     pub fn from_config(config: &Config, current: &str) -> Self {
         Self {
             url: config.update_url.clone(),
-            current: current.to_owned(),
+            current: config.version.clone().unwrap_or_else(|| current.to_owned()),
         }
     }
 }
@@ -40,6 +59,11 @@ impl UpdateConfig {
 /// than failing, so an app can ship before its update feed exists.
 pub fn register(registry: &mut Registry, config: &Config) {
     let update = UpdateConfig::from_config(config, env!("CARGO_PKG_VERSION"));
+
+    // Downloading and replacing the running binary is desktop work: on Android
+    // and iOS the store owns installation.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    install_commands(registry, update.clone());
 
     registry.add_async("update.check", move |_app, _payload| {
         let Some(url) = &update.url else {
@@ -316,5 +340,752 @@ mod fetch_tests {
             started.elapsed()
         );
         assert!(error.to_string().contains("update check failed"), "{error}");
+    }
+}
+
+/// One platform's artifact inside a manifest.
+#[derive(Debug, Clone)]
+struct Release {
+    version: String,
+    url: String,
+    sha256: String,
+    notes: Value,
+}
+
+/// The key a manifest uses for this build's artifact.
+fn platform_key() -> &'static str {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        return "linux-x86_64";
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        return "linux-aarch64";
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        return "macos-x86_64";
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        return "macos-aarch64";
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        return "windows-x86_64";
+    }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        return "windows-aarch64";
+    }
+    #[allow(unreachable_code)]
+    "unknown"
+}
+
+/// Parse and validate a manifest before anything is downloaded.
+///
+/// Two shapes are accepted: a single artifact at the top level (`url` and
+/// `sha256`), or a `downloads` object keyed by platform so one feed can serve
+/// every release. `sha256` is mandatory: an update that cannot be checked
+/// against the feed must not be installed, because a truncated download of a
+/// binary is not a smaller bug than a malicious one.
+fn parse_manifest(body: &str) -> Result<Release, Error> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|e| Error::Handler(format!("update endpoint returned invalid JSON: {e}")))?;
+    let version = value
+        .get("version")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| Error::Handler("update endpoint has no `version`".to_owned()))?
+        .to_owned();
+    let notes = value.get("notes").cloned().unwrap_or(Value::Null);
+
+    let artifact = match value.get("downloads") {
+        Some(Value::Object(map)) => {
+            let key = platform_key();
+            map.get(key).cloned().ok_or_else(|| {
+                let mut offered: Vec<&str> = map.keys().map(String::as_str).collect();
+                offered.sort_unstable();
+                Error::Handler(format!(
+                    "update endpoint has no download for `{key}`; it offers [{}]",
+                    offered.join(", ")
+                ))
+            })?
+        }
+        Some(_) => {
+            return Err(Error::Handler(
+                "update endpoint `downloads` must be an object keyed by platform".to_owned(),
+            ))
+        }
+        None => value.clone(),
+    };
+
+    let url = artifact
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| {
+            Error::Handler(format!(
+                "update endpoint has no download `url` for `{}`",
+                platform_key()
+            ))
+        })?
+        .to_owned();
+    require_trusted_url(&url)?;
+
+    let sha256 = artifact
+        .get("sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Error::Handler(
+                "update endpoint has no `sha256`; refusing to install an unverified artifact"
+                    .to_owned(),
+            )
+        })?
+        .to_owned();
+    check_sha256_text(&sha256)?;
+
+    Ok(Release {
+        version,
+        url,
+        sha256,
+        notes,
+    })
+}
+
+/// Refuse to download a binary over a channel that can rewrite it in transit.
+///
+/// Plain HTTP is accepted only for loopback, which is what a test server and a
+/// local release directory use; a real feed has to be TLS.
+fn require_trusted_url(url: &str) -> Result<(), Error> {
+    if url.starts_with("https://") {
+        return Ok(());
+    }
+    if let Some(rest) = url.strip_prefix("http://") {
+        let host = rest.split(['/', ':', '?']).next().unwrap_or("");
+        if matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+            return Ok(());
+        }
+    }
+    Err(Error::Handler(format!(
+        "update download URL must use https (http is allowed on loopback for tests): {url}"
+    )))
+}
+
+/// The lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Check that an expected digest is well formed before downloading anything.
+fn check_sha256_text(expected: &str) -> Result<(), Error> {
+    let normalized = expected.trim().to_ascii_lowercase();
+    let looks_right = normalized.len() == 64 && normalized.bytes().all(|b| b.is_ascii_hexdigit());
+    if looks_right {
+        return Ok(());
+    }
+    Err(Error::Handler(format!(
+        "update manifest has an invalid `sha256` (`{expected}`); expected 64 hex characters"
+    )))
+}
+
+/// The digest check, which is what makes a download safe to install at all.
+fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), Error> {
+    let actual = sha256_hex(bytes);
+    if actual == expected.trim().to_ascii_lowercase() {
+        return Ok(());
+    }
+    Err(Error::Handler(format!(
+        "update artifact failed verification: expected sha256 {}, got {actual}",
+        expected.trim()
+    )))
+}
+
+/// Manifest, trust and digest rules, independent of the network and the disk.
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod manifest_tests {
+    use super::*;
+
+    fn single(sha: &str) -> String {
+        format!(
+            r#"{{"version":"1.2.0","notes":"fixes","url":"https://example.com/app","sha256":"{sha}"}}"#
+        )
+    }
+
+    const GOOD: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    #[test]
+    fn a_single_artifact_manifest_parses() {
+        let release = parse_manifest(&single(GOOD)).unwrap();
+        assert_eq!(release.version, "1.2.0");
+        assert_eq!(release.url, "https://example.com/app");
+        assert_eq!(release.notes, json!("fixes"));
+    }
+
+    #[test]
+    fn a_per_platform_manifest_picks_this_build() {
+        let key = platform_key();
+        let body = json!({
+            "version": "2.0.0",
+            "downloads": {
+                key: { "url": format!("https://example.com/{key}"), "sha256": GOOD },
+                "other": { "url": "https://example.com/other", "sha256": GOOD }
+            }
+        })
+        .to_string();
+        let release = parse_manifest(&body).unwrap();
+        assert!(release.url.ends_with(platform_key()), "{}", release.url);
+    }
+
+    #[test]
+    fn a_missing_platform_names_the_ones_offered() {
+        let body = json!({
+            "version": "2.0.0",
+            "downloads": {
+                "bermuda-riscv": { "url": "https://example.com/x", "sha256": GOOD }
+            }
+        })
+        .to_string();
+        let error = parse_manifest(&body).unwrap_err().to_string();
+        assert!(error.contains(platform_key()), "{error}");
+        assert!(error.contains("bermuda-riscv"), "{error}");
+    }
+
+    #[test]
+    fn an_unverified_artifact_is_never_accepted() {
+        let body = r#"{"version":"1.2.0","url":"https://example.com/app"}"#;
+        let error = parse_manifest(body).unwrap_err().to_string();
+        assert!(error.contains("sha256"), "{error}");
+        for bad in ["", "abc", "zz"] {
+            let error = parse_manifest(&single(bad)).unwrap_err().to_string();
+            assert!(error.contains("invalid"), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn plain_http_is_refused_outside_loopback() {
+        let body = json!({
+            "version": "1.0.0",
+            "url": "http://example.com/app",
+            "sha256": GOOD
+        })
+        .to_string();
+        assert!(parse_manifest(&body).is_err());
+        let localhost = json!({
+            "version": "1.0.0",
+            "url": "http://127.0.0.1:9/app",
+            "sha256": GOOD
+        })
+        .to_string();
+        assert!(parse_manifest(&localhost).is_ok());
+    }
+
+    #[test]
+    fn the_digest_matches_the_known_sha256_of_ab_c() {
+        assert_eq!(sha256_hex(b"abc"), GOOD);
+        assert!(check_sha256_text(GOOD).is_ok());
+    }
+
+    #[test]
+    fn a_mismatched_digest_is_refused() {
+        let error = verify_sha256(b"tampered", GOOD).unwrap_err().to_string();
+        assert!(error.contains("failed verification"), "{error}");
+        assert!(verify_sha256(b"abc", &GOOD.to_ascii_uppercase()).is_ok());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Applying an update (desktop only)
+// ---------------------------------------------------------------------------
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// How long one artifact download may take, from connect to the last byte.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The largest artifact accepted. The shell is one binary, so 256 MiB is far
+/// past any real build and small enough that a wrong URL cannot fill a disk.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const ARTIFACT_CAP: u64 = 256 * 1024 * 1024;
+
+/// Download `url` with a deadline and a cap.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn download(url: &str) -> Result<Vec<u8>, Error> {
+    download_limited(url, DOWNLOAD_TIMEOUT, ARTIFACT_CAP)
+}
+
+/// [`download`] with the bounds as parameters, so a test can use a short
+/// deadline and a tiny cap against a local socket.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn download_limited(
+    url: &str,
+    timeout: std::time::Duration,
+    cap: u64,
+) -> Result<Vec<u8>, Error> {
+    require_trusted_url(url)?;
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .timeout_connect(Some(timeout))
+        .build()
+        .new_agent();
+    let mut response = agent
+        .get(url)
+        .call()
+        .map_err(|error| Error::Handler(format!("update download failed: {error}")))?;
+    response
+        .body_mut()
+        .with_config()
+        .limit(cap)
+        .read_to_vec()
+        .map_err(|error| Error::Handler(format!("update download failed: {error}")))
+}
+
+/// `target` with `suffix` appended to its file name.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn sibling(target: &Path, suffix: &str) -> PathBuf {
+    let mut name = target
+        .file_name()
+        .map(|name| name.to_owned())
+        .unwrap_or_else(|| "voussoir".into());
+    name.push(suffix);
+    target.with_file_name(name)
+}
+
+/// Write `bytes` to `path` and flush them to the device before returning.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)
+        .map_err(|error| Error::Handler(format!("could not create the new build: {error}")))?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        let _ = std::fs::remove_file(path);
+        return Err(Error::Handler(format!(
+            "could not write the new build: {error}"
+        )));
+    }
+    Ok(())
+}
+
+/// Replace `target` with `bytes` without ever leaving it half-written.
+///
+/// The new file is written beside the old one and renamed into place, because a
+/// rename is atomic within a filesystem: a crash or a full disk leaves the old
+/// binary runnable. A running executable can be replaced on Unix. Windows
+/// refuses that but allows *renaming* it, so the old file steps aside as `.old`
+/// and is restored if the second rename fails; the `.old` file is removed on the
+/// next install, once the process that ran it has exited.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn install_bytes(bytes: &[u8], target: &Path) -> Result<(), Error> {
+    let parent = target.parent().ok_or_else(|| {
+        Error::Handler(format!(
+            "cannot install next to `{}`: it has no parent directory",
+            target.display()
+        ))
+    })?;
+    let temp = sibling(target, &format!(".{}.tmp", std::process::id()));
+    let backup = sibling(target, ".old");
+
+    write_new_file(&temp, bytes)?;
+    // A leftover backup is a previous update whose process has since exited.
+    let _ = std::fs::remove_file(&backup);
+
+    let replaced = install_platform(&temp, target, &backup, parent);
+    if replaced.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    replaced
+}
+
+#[cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))]
+fn install_platform(
+    temp: &Path,
+    target: &Path,
+    _backup: &Path,
+    _parent: &Path,
+) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+    // Keep the mode the running binary had, so an installed copy stays
+    // executable even when the umask would not have made it so.
+    let mode = std::fs::metadata(target)
+        .map(|metadata| metadata.permissions().mode())
+        .unwrap_or(0o755);
+    std::fs::set_permissions(temp, std::fs::Permissions::from_mode(mode))
+        .map_err(|error| Error::Handler(format!("could not set the build executable: {error}")))?;
+    std::fs::rename(temp, target)
+        .map_err(|error| Error::Handler(format!("could not install the update: {error}")))
+}
+
+#[cfg(all(windows, not(any(target_os = "android", target_os = "ios"))))]
+fn install_platform(
+    temp: &Path,
+    target: &Path,
+    backup: &Path,
+    _parent: &Path,
+) -> Result<(), Error> {
+    let stepped_aside = std::fs::rename(target, backup).is_ok();
+    if let Err(error) = std::fs::rename(temp, target) {
+        if stepped_aside {
+            let _ = std::fs::rename(backup, target);
+        }
+        return Err(Error::Handler(format!(
+            "could not install the update: {error}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows, target_os = "android", target_os = "ios")))]
+fn install_platform(
+    _temp: &Path,
+    _target: &Path,
+    _backup: &Path,
+    _parent: &Path,
+) -> Result<(), Error> {
+    Err(Error::Handler(
+        "self-update is not supported on this platform; install it through the OS".to_owned(),
+    ))
+}
+
+/// The whole install: fetch the feed, download, verify, replace.
+///
+/// `target` is a parameter so a test can install into a temporary file instead
+/// of replacing the test binary.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn apply_to(update: &UpdateConfig, target: &Path, force: bool) -> Result<Value, Error> {
+    let url = update.url.as_deref().ok_or_else(|| {
+        Error::Handler("no update endpoint is configured in `update.url`".to_owned())
+    })?;
+    let body = fetch(url)?;
+    let release = parse_manifest(&body)?;
+    if !force && !is_newer(&update.current, &release.version) {
+        return Ok(json!({
+            "installed": false,
+            "reason": "up to date",
+            "current": update.current,
+            "latest": release.version,
+        }));
+    }
+    let bytes = download(&release.url)?;
+    verify_sha256(&bytes, &release.sha256)?;
+    install_bytes(&bytes, target)?;
+    Ok(json!({
+        "installed": true,
+        "version": release.version,
+        "path": target.display().to_string(),
+        "notes": release.notes,
+    }))
+}
+
+/// Register `update.apply` and `update.relaunch`.
+///
+/// The two are separate on purpose: installing can be interrupted (a crash, a
+/// revoked permission) without the app disappearing, and restarting is a
+/// decision the page can announce before it happens.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn install_commands(registry: &mut Registry, update: UpdateConfig) {
+    let installed: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+
+    let record = Arc::clone(&installed);
+    registry.add_async("update.apply", move |_app, payload| {
+        let force = payload
+            .get("force")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let target = std::env::current_exe().map_err(|error| {
+            Error::Handler(format!(
+                "cannot find the running binary to replace: {error}"
+            ))
+        })?;
+        let result = apply_to(&update, &target, force)?;
+        if result.get("installed").and_then(Value::as_bool) == Some(true) {
+            *record
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(target);
+        }
+        Ok(result)
+    });
+
+    registry.add("update.relaunch", move |_app, _payload| {
+        let path = installed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .ok_or_else(|| {
+                Error::Handler("no update is installed; call `update.apply` first".to_owned())
+            })?;
+        spawn_and_exit(path)?;
+        Ok(json!({ "restarting": true }))
+    });
+}
+
+/// The command that starts the freshly installed binary.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn relaunch_command(path: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(path);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command
+}
+
+/// Start the new build and leave this process.
+///
+/// The exit is delayed briefly because the command's reply leaves when the
+/// handler returns; exiting inside it would drop the reply the page is waiting
+/// for. On Windows the exit is also what releases the old binary.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn spawn_and_exit(path: PathBuf) -> Result<(), Error> {
+    relaunch_command(&path).spawn().map_err(|error| {
+        Error::Handler(format!("could not restart into the new build: {error}"))
+    })?;
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::process::exit(0);
+    });
+    Ok(())
+}
+
+/// Download, install and config-version rules that need a disk and a socket.
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod install_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener};
+    use std::time::Duration;
+
+    /// Serve `routes` in order, one connection each, checking the request path.
+    fn serve_with(build: impl FnOnce(SocketAddr) -> Vec<(String, Vec<u8>)>) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let routes = build(addr);
+        std::thread::spawn(move || {
+            for (path, body) in routes {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = [0u8; 2048];
+                let read = stream.read(&mut request).unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..read]).to_string();
+                assert!(
+                    request.starts_with(&format!("GET {path}")),
+                    "unexpected request: {request}"
+                );
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        addr
+    }
+
+    fn serve(routes: Vec<(String, Vec<u8>)>) -> SocketAddr {
+        serve_with(|_| routes)
+    }
+
+    fn temp_target(name: &str, contents: &[u8]) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "voussoir-update-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("app");
+        let mut file = std::fs::File::create(&target).unwrap();
+        file.write_all(contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        (dir, target)
+    }
+
+    fn feed(addr: SocketAddr, version: &str, artifact: &[u8]) -> Vec<u8> {
+        json!({
+            "version": version,
+            "notes": "notes",
+            "url": format!("http://{addr}/app"),
+            "sha256": sha256_hex(artifact),
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_download_is_bounded() {
+        let addr = serve(vec![("/big".to_owned(), vec![b'x'; 4096])]);
+        let error =
+            download_limited(&format!("http://{addr}/big"), Duration::from_secs(5), 64)
+                .unwrap_err();
+        assert!(error.to_string().contains("download failed"), "{error}");
+    }
+
+    #[test]
+    fn a_download_returns_exactly_the_bytes_served() {
+        let addr = serve(vec![("/app".to_owned(), b"binary-ish".to_vec())]);
+        let bytes =
+            download_limited(&format!("http://{addr}/app"), Duration::from_secs(5), 1024).unwrap();
+        assert_eq!(bytes, b"binary-ish");
+    }
+
+    #[test]
+    fn installing_replaces_the_binary_and_keeps_it_executable() {
+        let (dir, target) = temp_target("replace", b"old");
+        install_bytes(b"new", &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                std::fs::metadata(&target).unwrap().permissions().mode() & 0o111,
+                0,
+                "the replacement must stay executable"
+            );
+        }
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_install_clears_the_previous_backup() {
+        let (dir, target) = temp_target("twice", b"old");
+        install_bytes(b"one", &target).unwrap();
+        let backup = sibling(&target, ".old");
+        std::fs::write(&backup, b"stale").unwrap();
+        install_bytes(b"two", &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"two");
+        assert!(!backup.exists(), "the stale backup is swept up");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn applying_installs_what_the_feed_describes() {
+        let artifact = b"new-binary-contents".to_vec();
+        let addr = serve_with(|addr| {
+            vec![
+                ("/feed".to_owned(), feed(addr, "9.9.9", &artifact)),
+                ("/app".to_owned(), artifact.clone()),
+            ]
+        });
+        let (dir, target) = temp_target("apply", b"old");
+        let update = UpdateConfig {
+            url: Some(format!("http://{addr}/feed")),
+            current: "1.0.0".to_owned(),
+        };
+        let result = apply_to(&update, &target, false).unwrap();
+        assert_eq!(result["installed"], true, "{result}");
+        assert_eq!(result["version"], "9.9.9");
+        assert_eq!(std::fs::read(&target).unwrap(), artifact);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tampered_artifact_is_refused_and_the_old_binary_survives() {
+        let artifact = b"served-by-the-mirror".to_vec();
+        let addr = serve_with(|addr| {
+            let mut feed_body: Value = serde_json::from_slice(&feed(addr, "9.9.9", &artifact))
+                .expect("the test feed is valid JSON");
+            feed_body["sha256"] = json!(sha256_hex(b"expected-by-the-feed"));
+            vec![
+                ("/feed".to_owned(), feed_body.to_string().into_bytes()),
+                ("/app".to_owned(), artifact.clone()),
+            ]
+        });
+        let (dir, target) = temp_target("tampered", b"old");
+        let update = UpdateConfig {
+            url: Some(format!("http://{addr}/feed")),
+            current: "1.0.0".to_owned(),
+        };
+        let error = apply_to(&update, &target, false).unwrap_err();
+        assert!(error.to_string().contains("failed verification"), "{error}");
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"old",
+            "nothing may be installed after a failed check"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_up_to_date_feed_installs_nothing() {
+        let artifact = b"same".to_vec();
+        let addr = serve_with(|addr| vec![("/feed".to_owned(), feed(addr, "1.0.0", &artifact))]);
+        let (dir, target) = temp_target("uptodate", b"old");
+        let update = UpdateConfig {
+            url: Some(format!("http://{addr}/feed")),
+            current: "1.0.0".to_owned(),
+        };
+        let result = apply_to(&update, &target, false).unwrap();
+        assert_eq!(result["installed"], false, "{result}");
+        assert_eq!(result["reason"], "up to date");
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn force_reinstalls_the_same_version() {
+        let artifact = b"same-version-new-build".to_vec();
+        let addr = serve_with(|addr| {
+            vec![
+                ("/feed".to_owned(), feed(addr, "1.0.0", &artifact)),
+                ("/app".to_owned(), artifact.clone()),
+            ]
+        });
+        let (dir, target) = temp_target("force", b"old");
+        let update = UpdateConfig {
+            url: Some(format!("http://{addr}/feed")),
+            current: "1.0.0".to_owned(),
+        };
+        let result = apply_to(&update, &target, true).unwrap();
+        assert_eq!(result["installed"], true, "{result}");
+        assert_eq!(std::fs::read(&target).unwrap(), artifact);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_app_version_wins_over_the_framework_constant() {
+        let config = crate::Config {
+            version: Some("9.9.9".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            UpdateConfig::from_config(&config, "0.2.0").current,
+            "9.9.9"
+        );
+        assert_eq!(
+            UpdateConfig::from_config(&crate::Config::default(), "0.2.0").current,
+            "0.2.0"
+        );
+    }
+
+    #[test]
+    fn relaunch_starts_the_installed_path() {
+        let path = PathBuf::from("/tmp/voussoir-relaunch-test");
+        let command = relaunch_command(&path);
+        assert_eq!(command.get_program(), path.as_os_str());
+    }
+
+    #[test]
+    fn a_refused_restart_is_reported() {
+        let error = spawn_and_exit(PathBuf::from("/nonexistent/voussoir")).unwrap_err();
+        assert!(error.to_string().contains("could not restart"), "{error}");
     }
 }

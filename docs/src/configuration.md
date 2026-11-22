@@ -235,6 +235,19 @@ Absent means the command answers `{"configured": false, "available": false}`
 rather than failing, so an app can ship before its update feed exists. The
 endpoint's shape and version comparison are in [Updating the app](updater.md).
 
+### `version`
+
+The app's own version, compared against the feed by `update.check` and
+`update.apply`.
+
+```json
+{ "version": "2.1.0" }
+```
+
+Keep it equal to the `version` in your own `Cargo.toml`. Absent, the updater falls
+back to the framework's crate version (0.2.0), which is rarely the version your
+releases use.
+
 ## Theory: what is deliberately not in the file
 
 A config file invites every setting to move into it. These four stay out on

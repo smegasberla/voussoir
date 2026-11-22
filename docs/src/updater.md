@@ -1,8 +1,10 @@
 # Updating the app
 
-Voussoir gives you one command that answers "is there a newer version", and
-deliberately nothing that installs one. This chapter covers the command, the
-endpoint it reads, and why the download is left to you.
+Voussoir answers "is there a newer version" and, on desktop, can download,
+verify and install the build the feed names. Installing stays a separate command
+the page calls on purpose, because replacing a running binary is the one moment
+everything before it has to be right. This chapter covers both commands, the
+endpoint they read, and the trust model install rests on.
 
 ## Theory: why checking and installing are separate
 
@@ -17,7 +19,7 @@ Splitting the two makes each decision explicit:
 | --- | --- | --- |
 | Is there a newer version? | `update.check` | cheap, read-only, safe to automate |
 | Should this user install it now? | your app | needs consent, disk space, a restart story |
-| How is it downloaded and verified? | you | needs a signature, a progress bar, a rollback |
+| How is it downloaded and verified? | `update.apply` | the feed must name a `sha256`; the bytes must match it |
 
 So the built-in command stops before the risky part and hands you the facts.
 
@@ -43,21 +45,17 @@ Four possible outcomes, and all four are normal:
 | endpoint is newer | `{configured: true, current, latest, available: true, ...}` |
 | endpoint is invalid | `kind: "handler"` with a message naming the problem |
 
-**`current` is not your app's version.** It is `env!("CARGO_PKG_VERSION")` evaluated
-inside the `voussoir` crate, so it reports the framework's version (0.2.0), not the
-`version` in your own `Cargo.toml`. `env!` is resolved by the compiler in the crate
-that contains it, and the crate that contains it here is `voussoir`, not yours.
+**`current` is your app's version when `voussoir.json` has one.** Put the same
+string in the config's `version` as in your own `Cargo.toml`:
 
-That makes `available` a comparison between the framework's version and your feed,
-which is almost never what you want. Two honest options:
+```json
+{ "version": "2.1.0", "update": { "url": "https://example.com/releases/latest.json" } }
+```
 
-| You want | Do this |
-| --- | --- |
-| to know a new app version exists | write your own check: a command that fetches the same JSON and compares against your own version |
-| the built-in to be meaningful | keep the feed's shape and treat `latest` as data, ignoring `available` |
-
-Passing your own version in is not possible: `UpdateConfig::from_config` takes the
-string, but the only caller is `register`, which supplies the crate's constant.
+Without a `version` the command falls back to `env!("CARGO_PKG_VERSION")` evaluated
+inside the `voussoir` crate, which is the framework's version (0.2.0) and almost
+never what your feed tracks. Older docs told you to work around that by writing your
+own comparison; that is no longer necessary.
 
 **Why "not configured" is a success, not an error:** an app should be shippable
 before its update feed exists, and a first-run error dialog about a missing
@@ -138,9 +136,10 @@ Two rules in that snippet carry most of the value:
 
 - **A failed check is silent.** No dialog, no toast. The user did not ask for an
   update check and should not learn about your server being down.
-- **The download opens in the browser.** Navigation inside the app is refused by
-  policy (see [Security model](security.md)), and an OS browser shows the real URL
-  and the publisher's certificate.
+- **The install is not silent.** `update.apply` only runs when your page calls it,
+  and it refuses a feed whose artifact has no digest. If you would rather hand the
+  artifact to the OS, opening the release page in the browser still works: the
+  installer shows the real URL and the publisher's certificate.
 
 ## Theory: where to call it
 
@@ -152,12 +151,79 @@ If you need to respect a release cadence, store the last check time in
 [key/value storage](storage.md) and skip the call for a day. That is one `storage.get`
 and one `storage.set`, and it turns a per-launch request into a per-day one.
 
+## Applying the update
+
+Two commands, desktop only. On Linux, macOS and Windows:
+
+```ts
+const result = await window.voussoir.invoke<{
+  installed: boolean;
+  version?: string;
+  path?: string;
+  notes?: unknown;
+  reason?: string;
+}>("update.apply");
+```
+
+`update.apply` fetches the feed from `update.url` (never from the page), requires a
+newer `version`, downloads the artifact with a deadline and a 256 MiB cap, checks
+its SHA-256 against the feed, writes it beside the running binary and renames it into
+place. Nothing is installed when any of those steps fails, and the old binary keeps
+running. Pass `{ "force": true }` to reinstall the same version.
+
+```ts
+await window.voussoir.invoke("update.relaunch");
+```
+
+`update.relaunch` starts the installed binary and exits this process, after the
+reply has been delivered. It is a separate command so the page can show "restarting"
+first. It refuses unless `update.apply` installed something in this process, so a
+page cannot ask the shell to run an arbitrary path.
+
+**The manifest.** Either one artifact at the top level, or one per platform:
+
+```json
+{
+  "version": "2.1.0",
+  "notes": "Fixes a crash on save.",
+  "url": "https://example.com/releases/app-linux-x86_64",
+  "sha256": "9f2c... (64 hex characters)"
+}
+```
+
+```json
+{
+  "version": "2.1.0",
+  "downloads": {
+    "linux-x86_64": { "url": "https://example.com/app-linux-x86_64", "sha256": "..." },
+    "macos-aarch64": { "url": "https://example.com/app-macos-aarch64", "sha256": "..." },
+    "windows-x86_64": { "url": "https://example.com/app.exe", "sha256": "..." }
+  }
+}
+```
+
+A build reads `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`,
+`windows-x86_64` or `windows-aarch64`. `sha256` is mandatory and is checked before
+anything touches the disk.
+
+**The trust model, plainly.** The digest proves the bytes are the ones the feed
+named; it does not prove the feed was right. Authenticity rests on TLS to the URL in
+your config, so `https` is required everywhere except loopback (which is what a test
+server uses). A signature over the manifest, verified with an embedded public key, is
+the stronger design and is not built in: it needs key management the framework does
+not provide, and a hand-rolled scheme would be worse than the TLS it adds to.
+
+On Unix the new file takes the old one's mode and is renamed over it, which a running
+process allows. Windows refuses to replace a running executable but allows renaming
+it, so the old file steps aside as `<name>.old`, is restored if the follow-up rename
+fails, and is swept up by the next install.
+
 ## Android and iOS
 
-`update.check` works on mobile too, but a store may forbid an app from prompting for
-a side-loaded update: Play and the App Store both have policies about it. On those
-platforms the honest use is to *report* the version, or to disable the prompt and
-let the store do the updating.
+`update.check` works on mobile too, but `update.apply` and `update.relaunch` are not
+registered there: Play and the App Store own installation, and both have policies
+about prompting for a side-loaded update. On those platforms the honest use is to
+*report* the version, or to disable the prompt and let the store do the updating.
 
 The fetch goes through the platform's HTTP stack on Android, not a bundled TLS
 library, because the platform store already carries trusted roots. On iOS the
@@ -166,10 +232,12 @@ silently failing.
 
 ## What is not built in
 
-- **No download, no checksum, no signature check.** If you ship self-updating, that
-  is your code and your responsibility.
-- **No delta patching.**
-- **No progress UI.**
+- **No signature over the manifest.** The digest catches corruption and a swapped
+  artifact, but authenticity is TLS to your endpoint. Verified-release signing needs
+  key management the framework does not provide.
+- **No delta patching.** Every update is the whole binary.
+- **No progress UI.** `update.apply` resolves once; show an indeterminate spinner,
+  and offer the browser instead if the file is large.
 
 Each of these is a decision with a security implication, and a framework that makes
 it for you is a framework that makes it wrong for someone.
