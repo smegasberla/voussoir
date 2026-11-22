@@ -244,7 +244,12 @@ mod android {
     /// up, and a worker thread blocked on a channel would then leak for the rest
     /// of the process. Fifteen minutes is longer than a user plausibly spends in
     /// a file picker, and short enough that a dead activity is noticed.
-    const DIALOG_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+    // A backstop, not the normal path: the activity answers every request it
+    // accepts and refuses the ones it cannot with `fail_dialog` right away, so
+    // this only fires when the activity itself went away mid-pick. It used to be
+    // fifteen minutes, which is a parked worker for as long as a user keeps the
+    // app open.
+    const DIALOG_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
     /// The activity, replaced whenever the OS recreates it.
     ///

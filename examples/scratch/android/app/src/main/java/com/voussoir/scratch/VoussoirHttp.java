@@ -24,6 +24,15 @@ final class VoussoirHttp {
 
     private VoussoirHttp() {}
 
+    /**
+     * The largest body an update check will read, matching the Rust side's cap.
+     *
+     * <p>The endpoint answers with a version and a note; reading an unbounded
+     * body lets one bad endpoint cost an unbounded allocation on the UI-thread
+     * hop's worker.
+     */
+    private static final int MAX_BODY = 64 * 1024;
+
     /** The body of {@code url}, or null if it could not be fetched. */
     static String get(String url) {
         HttpURLConnection connection = null;
@@ -50,11 +59,14 @@ final class VoussoirHttp {
         }
     }
 
-    private static byte[] readAll(InputStream input) throws IOException {
+    static byte[] readAll(InputStream input) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         byte[] chunk = new byte[8192];
         int read;
         while ((read = input.read(chunk)) > 0) {
+            if (buffer.size() + read > MAX_BODY) {
+                throw new IOException("update check body exceeds " + MAX_BODY + " bytes");
+            }
             buffer.write(chunk, 0, read);
         }
         return buffer.toByteArray();

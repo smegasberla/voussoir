@@ -103,10 +103,6 @@ impl HotLib {
         })
     }
 
-    fn generation(&self) -> u64 {
-        read_lock(&self.state).live.generation
-    }
-
     /// Poll `latest.json` on a background thread and swap in each new
     /// generation. Spawns one thread and returns; it lives for the process.
     /// Associated (not a method) because the thread needs an owning `Arc`.
@@ -114,13 +110,33 @@ impl HotLib {
         let Some(dir) = this.dir.clone() else { return };
         let this = Arc::clone(this);
         std::thread::spawn(move || {
-            let mut last = this.generation();
+            // The last stale pointer reported. A rollback attempt that sits in
+            // `latest.json` is logged once, not on every poll tick.
+            let mut reported_refusal: Option<(u64, Option<u128>)> = None;
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(250));
                 let Ok(latest) = read_latest(&dir) else {
                     continue;
                 };
-                if latest.generation <= last {
+                // The live identity is read from the shell rather than from a
+                // loop-local counter, so a swap that happened through any other
+                // path is still what the decision compares against.
+                let (live_generation, live_built_at) = {
+                    let state = read_lock(&this.state);
+                    (state.live.generation, state.live.built_at)
+                };
+                if !should_swap(&latest, live_generation, live_built_at) {
+                    // A stale or restarted `latest.json` used to be skipped in
+                    // silence, so a shell stuck on an old build looked exactly
+                    // like a dev server that had stopped watching.
+                    let pointer = (latest.generation, latest.built_at);
+                    if latest.generation < live_generation && reported_refusal != Some(pointer) {
+                        eprintln!(
+                            "voussoir: ignoring hot gen {} (built_at {:?}): gen {live_generation} is already live, so a restarted latest.json cannot roll the shell back",
+                            latest.generation, latest.built_at
+                        );
+                        reported_refusal = Some(pointer);
+                    }
                     continue;
                 }
                 match open_library(&latest.path) {
@@ -142,10 +158,9 @@ impl HotLib {
                         // The shell-side state store outlives the library swap,
                         // so the generation it reports is the one that is live.
                         crate::state::note_reload();
-                        last = latest.generation;
                     }
                     Err(error) => eprintln!(
-                        "voussoir: hot reload FAILED (gen {}): {error} — keeping gen {last}",
+                        "voussoir: hot reload FAILED (gen {}): {error} — keeping gen {live_generation}",
                         latest.generation
                     ),
                 }
@@ -264,6 +279,29 @@ fn read_latest(dir: &Path) -> Result<Latest, String> {
         generation,
         built_at: value.get("builtAt").and_then(Value::as_u64).map(u128::from),
     })
+}
+
+/// Whether the pointer file describes a library the shell does not already run.
+///
+/// Generations order rebuilds, so comparing them alone was wrong in both
+/// directions. A lower generation is what a restarted dev server writes when its
+/// counter starts over, and acting on it silently rolled the shell back to an old
+/// build. The pointer's build timestamp is the tiebreaker: a strictly newer build
+/// is accepted even at a lower generation, because that is a fresh compile rather
+/// than a rollback. An equal generation is the build already live and is never
+/// swapped in a second time.
+fn should_swap(latest: &Latest, live_generation: u64, live_built_at: Option<u128>) -> bool {
+    match latest.generation.cmp(&live_generation) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => false,
+        std::cmp::Ordering::Less => match (latest.built_at, live_built_at) {
+            (Some(built), Some(live)) => built > live,
+            (Some(_), None) => true,
+            // No timestamp on the pointer means there is nothing that can prove
+            // it is newer than the live build, so it is not acted on.
+            (None, _) => false,
+        },
+    }
 }
 
 fn now_ms() -> u128 {
@@ -469,5 +507,51 @@ mod tests {
         let parsed: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed["error"]["message"], "unknown command: greet");
         assert_eq!(parsed["error"]["kind"], "unknown");
+    }
+}
+
+/// The pointer-file decision, testable without a dylib: the rollback bug was in
+/// the comparison, not in the loading.
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+
+    fn pointer(generation: u64, built_at: Option<u128>) -> Latest {
+        Latest {
+            path: PathBuf::from("/tmp/voussoir-commands.so"),
+            generation,
+            built_at,
+        }
+    }
+
+    #[test]
+    fn a_higher_generation_is_swapped_in() {
+        assert!(should_swap(&pointer(3, None), 2, Some(100)));
+    }
+
+    #[test]
+    fn a_stale_pointer_does_not_roll_the_shell_back() {
+        assert!(!should_swap(&pointer(1, Some(50)), 7, Some(100)));
+        assert!(!should_swap(&pointer(1, None), 7, Some(100)));
+        assert!(
+            !should_swap(&pointer(1, Some(100)), 7, Some(100)),
+            "an equal timestamp is not newer than the live build"
+        );
+    }
+
+    #[test]
+    fn a_restarted_dev_server_is_accepted_on_a_newer_timestamp() {
+        // The counter restarted at 1, but this build is newer than the live one,
+        // so it is a fresh compile rather than a rollback.
+        assert!(should_swap(&pointer(1, Some(101)), 7, Some(100)));
+    }
+
+    #[test]
+    fn the_same_generation_is_not_reloaded_again() {
+        assert!(!should_swap(&pointer(5, Some(100)), 5, Some(100)));
+        assert!(
+            !should_swap(&pointer(5, Some(999)), 5, Some(100)),
+            "a rewritten pointer with the same gen must not swap again"
+        );
     }
 }
