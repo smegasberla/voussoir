@@ -70,7 +70,7 @@ jobs:
       # code added without a test still does. No `cargo install`, so the number
       # here is the same one a developer gets locally.
       - name: Coverage tools
-        run: rustup component add llvm-tools-preview && llvm-profdata --version
+        run: rustup component add llvm-tools-preview
 
       - name: Coverage
         run: ./scripts/coverage.sh

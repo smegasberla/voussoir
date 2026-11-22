@@ -14,6 +14,11 @@ categories = ["gui", "development-tools"]
 exclude = ["examples/studio/icon.png"]
 
 [dependencies]
+# Signature verification for updates. Pure Rust, so it builds on every target;
+# only the transport (`ureq`) is desktop-only.
+sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
+ed25519-dalek = { version = "2", optional = true, default-features = false, features = ["fast", "std", "zeroize"] }
 # `linux-body` is not optional here: WebKitGTK only delivers POST bodies to a
 # custom protocol handler when that feature is on, and the whole IPC bridge is
 # a POST. Without it, invoke() silently receives an empty payload on Linux.
@@ -47,12 +52,6 @@ futures-util = { version = "0.3", optional = true }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
 gtk = "0.18"
 
-# Signature verification, kept outside the desktop-only block: these are pure
-# Rust and compile on mobile, where the updater still checks signatures. Only
-# the transport above (`ureq`) is desktop-only.
-sha2 = { version = "0.10", optional = true }
-base64 = { version = "0.22", optional = true }
-ed25519-dalek = { version = "2", optional = true, default-features = false, features = ["fast", "std", "zeroize"] }
 
 [features]
 default = []

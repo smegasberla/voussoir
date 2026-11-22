@@ -25,8 +25,19 @@ FLOOR="${VOUSSOIR_COV_FLOOR:-65}"
 WORK="${VOUSSOIR_COV_DIR:-target/coverage}"
 CRATE="${VOUSSOIR_COV_CRATE:-voussoir}"
 
-command -v llvm-profdata >/dev/null || { echo "coverage: llvm-profdata not found" >&2; exit 2; }
-command -v llvm-cov >/dev/null || { echo "coverage: llvm-cov not found" >&2; exit 2; }
+# `rustup component add llvm-tools-preview` installs the binaries inside the
+# toolchain instead of on PATH, which is exactly where CI's rust-step puts them.
+if ! command -v llvm-profdata >/dev/null || ! command -v llvm-cov >/dev/null; then
+  sysroot="$(rustc --print sysroot)"
+  host="$(rustc -vV | sed -n 's/^host: //p')"
+  if [ -d "$sysroot/lib/rustlib/$host/bin" ]; then
+    PATH="$sysroot/lib/rustlib/$host/bin:$PATH"
+    export PATH
+  fi
+fi
+
+command -v llvm-profdata >/dev/null || { echo "coverage: llvm-profdata not found (rustup component add llvm-tools-preview)" >&2; exit 2; }
+command -v llvm-cov >/dev/null || { echo "coverage: llvm-cov not found (rustup component add llvm-tools-preview)" >&2; exit 2; }
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
