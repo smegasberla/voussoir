@@ -57,15 +57,26 @@ pub(crate) fn serve_bridge(
     };
     let payload = parsed.get("payload").cloned().unwrap_or(Value::Null);
 
+    // Owned, because the reply runs after this function returns and only the
+    // requesting window may receive it.
+    let target = label.map(str::to_owned);
+    let dispatch_target = target.clone();
     let script_handle = handle.clone();
-    registry.dispatch_for_window(handle, label, &method, payload, move |body| {
+    registry.dispatch_for_window(handle, dispatch_target.as_deref(), &method, payload, move |body| {
         // `body` is already an envelope; hand it to the page as JSON, not as a
         // string, so the shim does not have to parse twice.
         let script = format!(
             "window.__voussoir_resolve&&window.__voussoir_resolve({}, {})",
             id, body
         );
-        script_handle.eval_all(&script);
+        // Only the window that asked: the shim's pending map and id counter are
+        // per frame, so evaluating in every window could resolve another
+        // window's promise with this reply. `None` is a caller with no window
+        // (the desktop bridge fallback) and keeps the broadcast behavior.
+        match &target {
+            Some(label) => script_handle.eval_window(label, &script),
+            None => script_handle.eval_all(&script),
+        }
     });
 }
 

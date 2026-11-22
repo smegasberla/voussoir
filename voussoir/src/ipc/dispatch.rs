@@ -166,7 +166,26 @@ impl super::registry::Registry {
             }
             #[cfg(feature = "rt")]
             Some(Handler::Deferred(handler)) => {
-                handler(handle.clone(), payload, Box::new(done));
+                // A deferred handler owns its completion, so it can answer from
+                // any task and hold the page's promise just as long as an async
+                // one. Without claiming here, this arm bypassed both bounds and
+                // a page could spawn unbounded tasks through it.
+                let Some(admission) = claim_admission(&self.pending, self.max_pending) else {
+                    return done(error_envelope_for(method, &Error::Busy(self.max_pending)));
+                };
+                let Some(permit) = claim_worker_slot(&self.worker_inflight, self.worker_limit)
+                else {
+                    return done(error_envelope_for(method, &Error::Busy(self.worker_limit)));
+                };
+                let answer: Box<dyn FnOnce(String) + Send> = Box::new(move |body| {
+                    // Released before the reply, same as the async path: the
+                    // handler is done, so the slot is free before anyone is
+                    // woken by the answer.
+                    drop(permit);
+                    drop(admission);
+                    done(body);
+                });
+                handler(handle.clone(), payload, answer);
             }
             None => self.dispatch_unclaimed(method, payload, done),
         }
@@ -183,21 +202,60 @@ impl super::registry::Registry {
     {
         match &self.hot {
             Some(hot) => {
+                // A hot-library call is a worker-thread call like any other, so
+                // it claims the same two bounds. Without that, a page looping on
+                // a hot command spawned threads without limit, each reserving a
+                // stack, and `max_pending`/`worker_limit` never applied.
+                let Some(admission) = claim_admission(&self.pending, self.max_pending) else {
+                    return done(error_envelope_for(method, &Error::Busy(self.max_pending)));
+                };
+                let Some(permit) = claim_worker_slot(&self.worker_inflight, self.worker_limit)
+                else {
+                    return done(error_envelope_for(method, &Error::Busy(self.worker_limit)));
+                };
                 let hot = std::sync::Arc::clone(hot);
                 let method = method.to_owned();
-                std::thread::spawn(move || {
-                    // Belt over the dylib's own catch_unwind: the page gets a
-                    // response even if this outer layer is what failed.
-                    let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        hot.call(&method, &payload)
-                    }))
-                    .unwrap_or_else(|_| {
-                        error_envelope(&Error::Handler(
-                            "hot command call failed".to_owned(),
-                        ))
+                let method_for_error = method.clone();
+                let answer: std::sync::Arc<std::sync::Mutex<Option<F>>> =
+                    std::sync::Arc::new(std::sync::Mutex::new(Some(done)));
+                let in_thread = std::sync::Arc::clone(&answer);
+                let spawned = std::thread::Builder::new()
+                    .name("voussoir:hot".to_owned())
+                    .spawn(move || {
+                        // Belt over the dylib's own catch_unwind: the page gets
+                        // a response even if this outer layer is what failed.
+                        let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            hot.call(&method, &payload)
+                        }))
+                        .unwrap_or_else(|_| {
+                            error_envelope(&Error::Handler(
+                                "hot command call failed".to_owned(),
+                            ))
+                        });
+                        // Both guards go before the reply, so the counts have
+                        // moved by the time the page is woken.
+                        drop(permit);
+                        drop(admission);
+                        if let Some(answer) = in_thread
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .take()
+                        {
+                            answer(body);
+                        }
                     });
-                    done(body);
-                });
+                if let Err(error) = spawned {
+                    if let Some(answer) = answer
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take()
+                    {
+                        answer(error_envelope_for(
+                            &method_for_error,
+                            &Error::Runtime(format!("could not start a worker thread: {error}")),
+                        ));
+                    }
+                }
             }
             None => done(error_envelope_for(
                 method,

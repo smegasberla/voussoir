@@ -18,7 +18,9 @@ pub(crate) enum UserEvent {
     Emit {
         label: Option<String>,
         event: String,
-        payload: String,
+        /// The value as given. Serializing at the eval boundary means a poster
+        /// cannot accidentally smuggle page code in a pre-stringified payload.
+        payload: Value,
     },
     OpenWindow(WindowOptions),
     CloseWindow(String),
@@ -34,8 +36,8 @@ pub(crate) enum UserEvent {
     /// A menu change for the UI thread to apply.
     #[cfg(feature = "menu")]
     MenuUpdate(live::Change),
-    /// Run a script in every window (used to resolve bridge promises).
-    Eval(String),
+    /// Run a script, in every window when `label` is `None`, else only there.
+    Eval { label: Option<String>, script: String },
 }
 /// A handle passed to command handlers. Cheap to clone, safe to send to other
 /// threads, and the only way to push data into the page or open a window.
@@ -112,7 +114,7 @@ impl AppHandle {
         let _ = proxy.send_event(UserEvent::Emit {
             label: label.map(str::to_owned),
             event: event.to_owned(),
-            payload: payload.to_string(),
+            payload,
         });
     }
 
@@ -256,7 +258,23 @@ impl AppHandle {
     /// so the script is queued as a user event like any other emit.
     pub(crate) fn eval_all(&self, script: &str) {
         let Some(proxy) = &self.proxy else { return };
-        let _ = proxy.send_event(UserEvent::Eval(script.to_owned()));
+        let _ = proxy.send_event(UserEvent::Eval {
+            label: None,
+            script: script.to_owned(),
+        });
+    }
+
+    /// Evaluate a script in one window by label, on the UI thread.
+    ///
+    /// Bridge replies use this. Each frame owns its pending map and id counter,
+    /// so evaluating the resolve script everywhere could settle another window's
+    /// promise with this window's reply.
+    pub(crate) fn eval_window(&self, label: &str, script: &str) {
+        let Some(proxy) = &self.proxy else { return };
+        let _ = proxy.send_event(UserEvent::Eval {
+            label: Some(label.to_owned()),
+            script: script.to_owned(),
+        });
     }
 
     /// Open devtools on every window. Needs the `devtools` feature in release

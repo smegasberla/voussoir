@@ -37,6 +37,10 @@ pub const SIZE_CAP: usize = 4 * 1024 * 1024;
 /// into a nested object. Nesting belongs in the value the app chooses to store.
 pub struct Store {
     path: PathBuf,
+    /// Serializes read-mutate-write across threads. wry's async protocol
+    /// handler runs requests on several threads, so without this two `set`
+    /// calls read the same map and the later rename drops the earlier key.
+    lock: Mutex<()>,
 }
 
 impl Store {
@@ -51,13 +55,17 @@ impl Store {
         })?;
         Ok(Self {
             path: dir.join("storage.json"),
+            lock: Mutex::new(()),
         })
     }
 
     /// Open a store at an explicit path. Tests use this; apps should not need
     /// to, because the data directory is what makes the data follow the user.
     pub fn at(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            lock: Mutex::new(()),
+        }
     }
 
     /// Where this store persists, for diagnostics and `storage.path`.
@@ -90,9 +98,12 @@ impl Store {
 
     /// Replace the whole map, atomically.
     ///
-    /// Writes to `storage.json.tmp` in the same directory and renames over the
-    /// target: a rename inside one filesystem is atomic, so a crash leaves
-    /// either the old file or the new one, never a half-written one.
+    /// Writes to a unique `storage.json.tmp.<pid>.<n>` in the same directory and
+    /// renames over the target: a rename inside one filesystem is atomic, so a
+    /// crash leaves either the old file or the new one, never a half-written
+    /// one. The temp name is per-write because a shared `storage.json.tmp`
+    /// let concurrent writers interleave into one file and rename torn JSON
+    /// into place.
     pub fn write(&self, map: &BTreeMap<String, Value>) -> Result<(), Error> {
         let object: Map<String, Value> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let body = serde_json::to_vec_pretty(&Value::Object(object))
@@ -109,16 +120,28 @@ impl Store {
             .ok_or_else(|| Error::Runtime("storage path has no parent".to_owned()))?;
         std::fs::create_dir_all(parent)
             .map_err(|error| Error::Runtime(format!("storage directory: {error}")))?;
-        let tmp = self.path.with_extension("json.tmp");
+        let tmp = self.unique_temp();
         {
             let mut file = std::fs::File::create(&tmp)
                 .map_err(|error| Error::Runtime(format!("storage write failed: {error}")))?;
-            file.write_all(&body)
-                .and_then(|()| file.sync_all())
-                .map_err(|error| Error::Runtime(format!("storage write failed: {error}")))?;
+            if let Err(error) = file.write_all(&body).and_then(|()| file.sync_all()) {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(Error::Runtime(format!("storage write failed: {error}")));
+            }
         }
-        std::fs::rename(&tmp, &self.path)
-            .map_err(|error| Error::Runtime(format!("storage replace failed: {error}")))
+        if let Err(error) = std::fs::rename(&tmp, &self.path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(Error::Runtime(format!("storage replace failed: {error}")));
+        }
+        Ok(())
+    }
+
+    /// A temp name no other writer can collide with.
+    fn unique_temp(&self) -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nth = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.path
+            .with_extension(format!("json.tmp.{}.{nth}", std::process::id()))
     }
 
     /// One key, or `null` when it was never set.
@@ -128,6 +151,12 @@ impl Store {
 
     /// Set one key. Returns the previous value, or `null`.
     pub fn set(&self, key: &str, value: Value) -> Result<Value, Error> {
+        // Held across read-mutate-write: releasing between the two calls would
+        // reintroduce the lost update the lock exists to prevent.
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut map = self.read()?;
         let previous = map.insert(key.to_owned(), value).unwrap_or(Value::Null);
         self.write(&map)?;
@@ -136,6 +165,10 @@ impl Store {
 
     /// Remove one key. Returns whether it existed.
     pub fn delete(&self, key: &str) -> Result<bool, Error> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut map = self.read()?;
         let existed = map.remove(key).is_some();
         if existed {
@@ -352,6 +385,57 @@ mod tests {
         store.set("a", json!(2)).unwrap();
         assert!(!store.path().with_extension("json.tmp").exists());
         assert_eq!(store.get("a").unwrap(), json!(2));
+    }
+
+    #[test]
+    fn concurrent_sets_keep_every_key() {
+        // 16 threads x 25 keys through one store. Without the lock most of these
+        // are lost: every writer reads the same map and the last rename wins.
+        let store = std::sync::Arc::new(temp_store("concurrent"));
+        let writers: Vec<_> = (0..16)
+            .map(|writer| {
+                let store = std::sync::Arc::clone(&store);
+                std::thread::spawn(move || {
+                    for nth in 0..25 {
+                        store
+                            .set(&format!("k{writer}-{nth}"), json!(nth))
+                            .expect("serialized writes cannot fail");
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        assert_eq!(store.read().unwrap().len(), 16 * 25);
+    }
+
+    #[test]
+    fn concurrent_writes_leave_no_temp_files() {
+        let store = std::sync::Arc::new(temp_store("temp-clean"));
+        let writers: Vec<_> = (0..8)
+            .map(|writer| {
+                let store = std::sync::Arc::clone(&store);
+                std::thread::spawn(move || {
+                    for nth in 0..10 {
+                        store.set(&format!("k{writer}-{nth}"), json!(nth)).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let dir = store.path().parent().unwrap();
+        let leftovers: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "storage.json")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
     }
 
     #[test]

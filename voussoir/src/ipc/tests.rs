@@ -245,6 +245,76 @@ fn an_unlabelled_window_request_uses_the_global_allowlist() {
 }
 
 #[test]
+fn raising_the_async_limit_moves_the_pending_cap_with_it() {
+    let mut reg = registry_with(&["greet"]);
+    reg.set_async_limit(2);
+    assert_eq!(reg.async_limit(), 2);
+    assert_eq!(
+        reg.max_pending(),
+        2,
+        "a stale pending cap makes a raised limit inert"
+    );
+    reg.set_async_limit(7);
+    assert_eq!(reg.max_pending(), 7, "the cap follows every change");
+    // The cap can still be set independently afterwards, which is what the
+    // two knobs exist for.
+    reg.set_max_pending(3);
+    assert_eq!(reg.async_limit(), 7);
+    assert_eq!(reg.max_pending(), 3);
+}
+
+#[cfg(feature = "rt")]
+#[test]
+fn a_deferred_command_holds_admission_and_a_worker_slot() {
+    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    let (release, gate) = channel::<()>();
+    let gate = Arc::new(Mutex::new(Some(gate)));
+    let mut reg = Registry::new();
+    reg.set_async_limit(1);
+    reg.add_async_fn("hold", move |_handle, _args: Value| {
+        let gate = Arc::clone(&gate);
+        async move {
+            // Holds the request open until the test releases it; the point is
+            // that the two bounds are claimed while it waits.
+            let receiver: Option<Receiver<()>> = gate.lock().unwrap().take();
+            if let Some(receiver) = receiver {
+                let _ = receiver.recv_timeout(Duration::from_secs(5));
+            }
+            Ok(json!({ "held": true }))
+        }
+    });
+
+    let (done_tx, done_rx) = channel();
+    reg.dispatch_deferred(&empty_handle(), "hold", Value::Null, move |body| {
+        let _ = done_tx.send(body);
+    });
+    let mut waited = 0;
+    while reg.pending() == 0 && waited < 200 {
+        std::thread::sleep(Duration::from_millis(5));
+        waited += 1;
+    }
+    assert_eq!(reg.pending(), 1, "the deferred call must be admitted");
+    assert_eq!(reg.async_inflight(), 1, "and must hold a worker slot");
+
+    // A second call is refused while the only place is held.
+    let body = reg.dispatch(&empty_handle(), "hold", Value::Null);
+    assert!(body.contains(r#""kind":"busy""#), "{body}");
+
+    release.send(()).unwrap();
+    let body = done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(body.contains(r#""ok""#), "{body}");
+    assert_eq!(reg.pending(), 0, "the admission is released with the reply");
+    assert_eq!(
+        reg.async_inflight(),
+        0,
+        "the worker slot is released with the reply"
+    );
+}
+
+#[test]
 fn a_bodyless_typed_command_reads_as_an_empty_argument_struct() {
     #[derive(crate::serde::Deserialize, Default)]
     #[serde(default, crate = "crate::serde")]

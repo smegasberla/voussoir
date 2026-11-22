@@ -95,11 +95,7 @@ pub(crate) fn dispatch(
             event,
             payload,
         }) => {
-            let script = format!(
-                "window.__voussoir_emit&&window.__voussoir_emit({},{})",
-                serde_json::to_string(&event).unwrap_or_else(|_| "\"\"".to_owned()),
-                payload
-            );
+            let script = emit_script(&event, &payload);
             for entry in state.open.values() {
                 if label.as_ref().is_none_or(|l| *l == entry.label) {
                     if let Err(error) = entry.webview.evaluate_script(&script) {
@@ -156,8 +152,14 @@ pub(crate) fn dispatch(
             #[cfg(not(feature = "menu"))]
             let _ = &id;
         }
-        Event::UserEvent(UserEvent::Eval(script)) => {
+        Event::UserEvent(UserEvent::Eval { label, script }) => {
             for entry in state.open.values() {
+                // A bridge reply is addressed to the window that asked: the
+                // shim's pending map and id counter are per frame, so a
+                // broadcast could settle another window's promise.
+                if label.as_ref().is_some_and(|l| *l != entry.label) {
+                    continue;
+                }
                 if let Err(error) = entry.webview.evaluate_script(&script) {
                     eprintln!("voussoir: eval failed: {error}");
                 }
@@ -216,5 +218,43 @@ fn announce_close(state: &LoopState, label: &str) {
             "voussoir: on_window_close panicked: {}",
             crate::ipc::panic_message(payload.as_ref())
         );
+    }
+}
+
+/// Build the `emit` script, serializing the payload at the boundary.
+///
+/// The payload used to be interpolated as pre-serialized text, which is only
+/// safe while every `UserEvent::Emit` poster remembers to encode it. Serializing
+/// here means a poster that passes raw text cannot turn it into page code: a
+/// quote becomes `\"`, a `</script>` cannot close anything, and the page receives
+/// exactly the JSON value it was given.
+fn emit_script(event: &str, payload: &serde_json::Value) -> String {
+    format!(
+        "window.__voussoir_emit&&window.__voussoir_emit({},{})",
+        serde_json::to_string(event).unwrap_or_else(|_| "\"\"".to_owned()),
+        serde_json::to_string(payload).unwrap_or_else(|_| "null".to_owned())
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_emit_payload_is_reserialized_at_the_boundary() {
+        let script = emit_script("tick", &json!({ "text": "\"); alert(1); //" }));
+        // The injection stays inside the JSON string: its quote is escaped, so
+        // the call cannot be broken out of.
+        assert_eq!(
+            script,
+            r#"window.__voussoir_emit&&window.__voussoir_emit("tick",{"text":"\"); alert(1); //"})"#
+        );
+    }
+
+    #[test]
+    fn an_emit_event_name_is_a_json_string() {
+        let script = emit_script("a\"b", &json!(null));
+        assert!(script.contains(r#"("a\"b",null)"#), "{script}");
     }
 }

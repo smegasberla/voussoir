@@ -82,8 +82,16 @@ impl Registry {
     /// commands are I/O-bound and a burst of concurrent calls is normal; lower it
     /// on a memory-constrained target. A value of 0 is treated as 1, because a
     /// limit of zero would make every async command permanently uncallable.
+    ///
+    /// This also resets the pending cap to the new limit, because the cap is
+    /// derived from it: leaving a stale cap made raising the limit inert, since
+    /// admission refused every call past the old number before a worker slot
+    /// was ever claimed. Call this before [`Self::set_max_pending`] when the
+    /// two should differ.
     pub fn set_async_limit(&mut self, limit: usize) {
-        self.worker_limit = limit.max(1);
+        let limit = limit.max(1);
+        self.worker_limit = limit;
+        self.max_pending = default_max_pending(limit);
     }
 
     /// The current worker-thread limit, for diagnostics and tests.
