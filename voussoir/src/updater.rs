@@ -908,6 +908,9 @@ fn install_platform(
             "could not install the update: {error}"
         )));
     }
+    // The replaced binary is this process's own executable on Windows, so it
+    // may stay locked until exit; a leftover is swept on the next install.
+    let _ = std::fs::remove_file(backup);
     Ok(())
 }
 

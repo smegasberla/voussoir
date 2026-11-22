@@ -3,7 +3,7 @@ import { featuresFor } from "./commands/dev.ts";
 
 describe("dev shell launch", () => {
   test("asks for hot reload when the scaffold declares it", () => {
-    expect(featuresFor(true)).toEqual(["cargo", "run", "--features", "hot-reload"]);
+    expect(featuresFor(true)).toEqual(["cargo", "run", "--features", "hot-reload,devtools"]);
   });
 
   test("runs plain cargo for a pre-hot-reload scaffold", () => {
