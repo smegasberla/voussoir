@@ -6,7 +6,7 @@
  *  configuration at build time.
  */
 
-import { existsSync, mkdirSync, copyFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
 import { bundle, writeAssetTable } from "../pipeline.ts";
@@ -27,6 +27,28 @@ export function androidDir(project: Project): string {
   return join(project.root, "android");
 }
 
+/** NDK host prebuilt directories, one per desktop OS. */
+export const NDK_HOST_PREBUILT: Record<string, string> = {
+  linux: "linux-x86_64",
+  darwin: "darwin-x86_64",
+  win32: "windows-x86_64",
+};
+
+/** The NDK prebuilt directory for a host, from what the NDK actually contains.
+ *
+ *  Derived rather than hardcoded: the NDK names its toolchains by host OS
+ *  (`linux-x86_64`, `darwin-x86_64`, `windows-x86_64`, and `darwin-arm64` on
+ *  newer releases), so a fixed path works on one machine and breaks the
+ *  Android build on the other two. `entries` is the listing of the NDK's
+ *  `prebuilt` directory; when it names a directory for this host, that wins.
+ */
+export function ndkHostDir(platform: string = process.platform, entries: string[] = []): string {
+  const prefix =
+    platform === "win32" ? "windows-" : platform === "darwin" ? "darwin-" : "linux-";
+  const match = entries.find((entry) => entry.startsWith(prefix));
+  return match ?? NDK_HOST_PREBUILT[platform] ?? NDK_HOST_PREBUILT.linux!;
+}
+
 /** The NDK toolchain, or a message saying what to install. */
 export function ndkToolchain(ndk: string | undefined): string {
   if (!ndk) {
@@ -35,9 +57,11 @@ export function ndkToolchain(ndk: string | undefined): string {
         "  sdkmanager 'ndk;27.0.12077973'",
     );
   }
-  const bin = join(ndk, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin");
+  const prebuilt = join(ndk, "toolchains", "llvm", "prebuilt");
+  const entries = existsSync(prebuilt) ? readdirSync(prebuilt) : [];
+  const bin = join(prebuilt, ndkHostDir(process.platform, entries), "bin");
   if (!existsSync(bin)) {
-    throw new Error(`NDK at ${ndk} has no llvm toolchain (looked in ${bin})`);
+    throw new Error(`NDK at ${ndk} has no llvm toolchain for this host (looked in ${bin})`);
   }
   return bin;
 }

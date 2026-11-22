@@ -142,6 +142,17 @@ impl AppHandle {
             .unwrap_or_else(|| self.open.unique_label(&self.default_entry));
         options.label = Some(label.clone());
 
+        // An explicit label that is already open is refused here, before the
+        // allowlist is touched: the loop would fail to build the window, but a
+        // silent no-op would still have replaced a live window's narrowing
+        // with whatever list the caller passed. Unnamed windows come from
+        // `unique_label`, which never collides.
+        if self.open.contains(&label) {
+            return Err(Error::Runtime(format!(
+                "window label `{label}` is already open"
+            )));
+        }
+
         if let (Some(commands), Some(allow)) = (&self.commands, options.allowlist.as_ref()) {
             commands.allow_window(&label, allow.clone());
         }

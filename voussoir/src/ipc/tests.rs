@@ -192,6 +192,34 @@ fn a_runtime_narrowing_cannot_widen_the_global_allowlist() {
 }
 
 #[test]
+fn a_second_runtime_narrowing_cannot_widen_an_existing_one() {
+    let reg = registry_with(&["greet", "save"]);
+    reg.allow_window("preview", vec!["greet".to_owned()]);
+    // Reusing a live label must intersect with the existing entry, not replace
+    // it: this is the widening the label-reuse bug allowed.
+    reg.allow_window("preview", vec!["greet".to_owned(), "save".to_owned()]);
+
+    assert!(dispatch_for(&reg, Some("preview"), "greet").contains(r#""ok""#));
+    assert!(
+        dispatch_for(&reg, Some("preview"), "save").contains(r#""kind":"unknown""#),
+        "a second call for the same label must not add commands"
+    );
+}
+
+#[test]
+fn a_second_runtime_narrowing_can_still_remove_more() {
+    let reg = registry_with(&["greet", "save"]);
+    reg.allow_window("preview", vec!["greet".to_owned(), "save".to_owned()]);
+    reg.allow_window("preview", vec!["greet".to_owned()]);
+
+    assert!(dispatch_for(&reg, Some("preview"), "greet").contains(r#""ok""#));
+    assert!(
+        dispatch_for(&reg, Some("preview"), "save").contains(r#""kind":"unknown""#),
+        "narrowing further is always allowed"
+    );
+}
+
+#[test]
 fn config_and_runtime_narrowings_accumulate_rather_than_replace() {
     let mut reg = registry_with(&["a", "b"]);
     reg.set_window_allowlist(HashMap::from([(

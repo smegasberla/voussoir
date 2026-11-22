@@ -72,10 +72,12 @@ export async function dev(args: Args): Promise<number> {
     console.log("  (native/Cargo.toml has no hot-reload feature; Rust edits need a restart)");
   }
 
-  const shell = spawn(["cargo", "run", "--features", "hot-reload"], {
-    cwd: crate,
-    env,
-  });
+  // `--features` only for a scaffold that declares the feature. An old
+  // scaffold would otherwise fail before it starts: cargo errors on the flag.
+  const shell = spawn(
+    featuresFor(hotSupported),
+    { cwd: crate, env },
+  );
 
   const shutdown = () => {
     stopWatching();
@@ -104,6 +106,17 @@ export function devEnv(port: number, verbose: boolean, base: Record<string, stri
     VOUSSOIR_DEV_URL: `http://127.0.0.1:${port}`,
     VOUSSOIR_VERBOSE: verbose ? "1" : "0",
   } as Record<string, string>;
+}
+
+/** The shell launch, feature flag included only when the scaffold has it.
+ *
+ *  Exported so a test can pin the difference: a pre-hot-reload scaffold must run
+ *  plain `cargo run`, while a current one asks for `--features hot-reload`.
+ */
+export function featuresFor(hotSupported: boolean): string[] {
+  return hotSupported
+    ? ["cargo", "run", "--features", "hot-reload"]
+    : ["cargo", "run"];
 }
 
 /** The platform's cdylib filename for the `commands` lib target. */

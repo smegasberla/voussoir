@@ -188,13 +188,14 @@ impl super::registry::Registry {
                 std::thread::spawn(move || {
                     // Belt over the dylib's own catch_unwind: the page gets a
                     // response even if this outer layer is what failed.
-                    let body =
-                        panic::catch_unwind(AssertUnwindSafe(|| hot.call(&method, &payload)))
-                            .unwrap_or_else(|_| {
-                                error_envelope(&Error::Handler(
-                                    "hot command call failed".to_owned(),
-                                ))
-                            });
+                    let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        hot.call(&method, &payload)
+                    }))
+                    .unwrap_or_else(|_| {
+                        error_envelope(&Error::Handler(
+                            "hot command call failed".to_owned(),
+                        ))
+                    });
                     done(body);
                 });
             }

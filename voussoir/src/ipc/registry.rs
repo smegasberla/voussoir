@@ -148,13 +148,28 @@ impl Registry {
     /// Called when a window with `WindowOptions::allowlist` is created, so the
     /// restriction exists before the page inside it can call anything. It is the
     /// same intersection as a config entry: a runtime list can only ever remove
-    /// commands, never add one the app withheld.
+    /// commands, never add one the app withheld. The guarantee is enforced here,
+    /// not only at the caller: a second call for the same label intersects with
+    /// the existing entry instead of replacing it, so reusing a live label can
+    /// never widen that window's surface.
     pub fn allow_window(&self, label: &str, commands: Vec<String>) {
         let mut allow = self
             .window_allow
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        allow.insert(label.to_owned(), commands);
+        match allow.get(label) {
+            Some(existing) => {
+                let narrowed: Vec<String> = existing
+                    .iter()
+                    .filter(|name| commands.contains(*name))
+                    .cloned()
+                    .collect();
+                allow.insert(label.to_owned(), narrowed);
+            }
+            None => {
+                allow.insert(label.to_owned(), commands);
+            }
+        }
     }
 
     /// The window labels with a narrowing entry, for diagnostics and tests.

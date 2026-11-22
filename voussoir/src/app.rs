@@ -26,6 +26,8 @@ use crate::{
 };
 #[cfg(feature = "menu")]
 use crate::{build_menu, menu_command_map};
+#[cfg(feature = "tray")]
+use crate::build_tray;
 
 /// The builder. Chain configuration, then `run()`.
 pub struct App {
