@@ -79,6 +79,9 @@ pub mod storage;
 pub mod tray;
 #[cfg(feature = "updater")]
 pub mod updater;
+/// Patch application for the updater; the generator lives in the CLI.
+#[cfg(feature = "updater")]
+pub mod delta;
 
 pub use app::platform_name;
 pub use app::App;

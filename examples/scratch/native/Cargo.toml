@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 # `full` turns on the native menu bar, file dialogs, update checks, and devtools
 # in release builds. Remove `features` to get the minimal shell.
-voussoir = { path = "../../../../voussoir", features = ["full", "tray"] }
+voussoir = { path = "../../../voussoir", features = ["full", "tray"] }
 
 [workspace]
 

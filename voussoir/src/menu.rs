@@ -248,6 +248,7 @@ impl MenuHandle {
 /// Quit item; other platforms use it only to label the quit entry.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn build(_app_name: &str, groups: &[MenuGroup]) -> Result<MenuHandle, String> {
+    validate(groups)?;
     Ok(MenuHandle {
         groups: std::sync::Mutex::new(groups.to_vec()),
     })
@@ -260,6 +261,8 @@ pub fn build(_app_name: &str, groups: &[MenuGroup]) -> Result<MenuHandle, String
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn build(app_name: &str, groups: &[MenuGroup]) -> Result<MenuHandle, String> {
     use muda::{Menu, MenuItem as MudaItem, PredefinedMenuItem, Submenu};
+
+    validate(groups)?;
 
     let menu = Menu::new();
 
@@ -330,6 +333,42 @@ pub fn build(app_name: &str, groups: &[MenuGroup]) -> Result<MenuHandle, String>
     Ok(MenuHandle { menu, checks })
 }
 
+/// Reject declarations that would make a menu broken or ambiguous.
+///
+/// Duplicate ids are the dangerous case: both items report the same event, the
+/// check map keeps only the last, and the page cannot tell which was clicked.
+/// An accelerator muda cannot parse is worse than no accelerator, because it
+/// looks declared and does nothing.
+pub fn validate(groups: &[MenuGroup]) -> Result<(), String> {
+    let mut seen = std::collections::HashMap::new();
+    for group in groups {
+        if group.title.trim().is_empty() {
+            return Err("a menu group needs a title".to_owned());
+        }
+        for item in &group.items {
+            if item.id.trim().is_empty() {
+                return Err(format!("menu item {:?} has an empty id", item.label));
+            }
+            if seen.insert(item.id.clone(), ()).is_some() {
+                return Err(format!(
+                    "menu items share the id {:?}; each item needs its own",
+                    item.id
+                ));
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if let Some(accelerator) = &item.accelerator {
+                if parse_accelerator(accelerator).is_none() {
+                    return Err(format!(
+                        "menu item {:?} has an accelerator muda cannot parse: {accelerator:?}",
+                        item.id
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Parse an accelerator string, tolerating the two spellings muda accepts.
 ///
 /// Android has no accelerators: a `PopupMenu` shows labels only, so the strings
@@ -389,6 +428,32 @@ mod tests {
         assert_eq!(g.items[0].command.as_deref(), Some("save"));
         assert_eq!(g.items[1].accelerator.as_deref(), Some("CmdOrCtrl+O"));
         assert!(g.items[1].command.is_none());
+    }
+
+    #[test]
+    fn duplicate_and_empty_ids_are_refused() {
+        let duplicate = [
+            MenuGroup::new("File").item(MenuItem::new("save", "Save")),
+            MenuGroup::new("Edit").item(MenuItem::new("save", "Save again")),
+        ];
+        let error = validate(&duplicate).unwrap_err();
+        assert!(error.contains("share the id"), "{error}");
+
+        let empty = [MenuGroup::new("File").item(MenuItem::new("", "Nameless"))];
+        assert!(validate(&empty).unwrap_err().contains("empty id"));
+
+        let untitled = [MenuGroup::new("  ").item(MenuItem::new("a", "A"))];
+        assert!(validate(&untitled).unwrap_err().contains("title"));
+        assert!(validate(&[group()]).is_ok());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn an_unparsable_accelerator_is_reported() {
+        let groups = [MenuGroup::new("File")
+            .item(MenuItem::new("save", "Save").accelerator("CmdOrCtrl+NotAKey"))];
+        let error = validate(&groups).unwrap_err();
+        assert!(error.contains("cannot parse"), "{error}");
     }
 
     #[test]

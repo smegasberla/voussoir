@@ -248,6 +248,23 @@ Keep it equal to the `version` in your own `Cargo.toml`. Absent, the updater fal
 back to the framework's crate version (0.2.0), which is rarely the version your
 releases use.
 
+### `update.public_key`
+
+The base64 Ed25519 public key an update artifact must be signed with.
+
+```json
+{
+  "update": {
+    "url": "https://example.com/latest.json",
+    "public_key": "Q2hlY2sgdGhlIGtleSB3aXRoIGtleWdlbg=="
+  }
+}
+```
+
+`voussoir keygen` prints this value. `update.apply` refuses without it, because a
+digest alone cannot prove who produced an artifact; `update.check` still works so an
+app can report a version before its key is set up.
+
 ## Theory: what is deliberately not in the file
 
 A config file invites every setting to move into it. These four stay out on

@@ -37,6 +37,8 @@ use crate::{Config, Error, Registry};
 #[derive(Debug, Clone)]
 pub struct UpdateConfig {
     pub url: Option<String>,
+    /// Base64 Ed25519 public key; `update.apply` refuses without it.
+    pub public_key: Option<String>,
     /// The running version, compared against the endpoint's `version`.
     pub current: String,
 }
@@ -50,6 +52,7 @@ impl UpdateConfig {
     pub fn from_config(config: &Config, current: &str) -> Self {
         Self {
             url: config.update_url.clone(),
+            public_key: config.update_public_key.clone(),
             current: config.version.clone().unwrap_or_else(|| current.to_owned()),
         }
     }
@@ -349,7 +352,22 @@ struct Release {
     version: String,
     url: String,
     sha256: String,
+    /// Base64 Ed25519 signature over the artifact bytes.
+    signature: Option<String>,
+    /// A patch from one older version to this one, when the feed offers one for
+    /// this platform. Patch bytes are themselves checked before use, and the
+    /// reconstructed binary is checked against `sha256`/`signature` exactly as a
+    /// full download would be.
+    patch: Option<Patch>,
     notes: Value,
+}
+
+#[derive(Debug, Clone)]
+struct Patch {
+    from: String,
+    url: String,
+    sha256: String,
+    signature: Option<String>,
 }
 
 /// The key a manifest uses for this build's artifact.
@@ -445,12 +463,58 @@ fn parse_manifest(body: &str) -> Result<Release, Error> {
         .to_owned();
     check_sha256_text(&sha256)?;
 
+    let signature = artifact
+        .get("signature")
+        .and_then(Value::as_str)
+        .map(|signature| signature.trim().to_owned());
+
+    let patch = match value.get("patches") {
+        Some(Value::Object(map)) => match map.get(platform_key()) {
+            Some(entry) => Some(parse_patch(entry)?),
+            None => None,
+        },
+        Some(_) => {
+            return Err(Error::Handler(
+                "update endpoint `patches` must be an object keyed by platform".to_owned(),
+            ))
+        }
+        None => None,
+    };
+
     Ok(Release {
         version,
         url,
         sha256,
+        signature,
+        patch,
         notes,
     })
+}
+
+/// Read one platform's patch entry.
+fn parse_patch(entry: &Value) -> Result<Patch, Error> {
+    let text = |field: &str| {
+        entry
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                Error::Handler(format!("update patch has no `{field}` for this platform"))
+            })
+    };
+    let patch = Patch {
+        from: text("from")?,
+        url: text("url")?,
+        sha256: text("sha256")?,
+        signature: entry
+            .get("signature")
+            .and_then(Value::as_str)
+            .map(|signature| signature.trim().to_owned()),
+    };
+    require_trusted_url(&patch.url)?;
+    check_sha256_text(&patch.sha256)?;
+    Ok(patch)
 }
 
 /// Refuse to download a binary over a channel that can rewrite it in transit.
@@ -503,6 +567,59 @@ fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), Error> {
         "update artifact failed verification: expected sha256 {}, got {actual}",
         expected.trim()
     )))
+}
+
+/// The exact length of an Ed25519 public key and signature.
+const PUBLIC_KEY_LEN: usize = 32;
+const SIGNATURE_LEN: usize = 64;
+
+/// Decode the base64 public key from `update.public_key`.
+fn decode_public_key(text: &str) -> Result<[u8; PUBLIC_KEY_LEN], Error> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(text.trim())
+        .map_err(|error| {
+            Error::Handler(format!(
+                "`update.public_key` is not valid base64: {error}"
+            ))
+        })?;
+    bytes.as_slice().try_into().map_err(|_| {
+        Error::Handler(format!(
+            "`update.public_key` must be {PUBLIC_KEY_LEN} bytes (a raw Ed25519 key), got {}",
+            bytes.len()
+        ))
+    })
+}
+
+/// Verify an artifact's detached Ed25519 signature.
+///
+/// This is what makes a feed trustworthy, which a digest alone cannot do: the
+/// digest proves the bytes match the feed, and the signature proves the feed's
+/// publisher produced them.
+fn verify_signature(bytes: &[u8], signature: &str, public_key: &str) -> Result<(), Error> {
+    use base64::Engine;
+    use ed25519_dalek::{Signature, VerifyingKey};
+
+    let key = decode_public_key(public_key)?;
+    let verifying = VerifyingKey::from_bytes(&key)
+        .map_err(|error| Error::Handler(format!("`update.public_key` is not a key: {error}")))?;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(signature.trim())
+        .map_err(|error| {
+            Error::Handler(format!("update `signature` is not valid base64: {error}"))
+        })?;
+    let raw: [u8; SIGNATURE_LEN] = raw.as_slice().try_into().map_err(|_| {
+        Error::Handler(format!(
+            "update `signature` must be {SIGNATURE_LEN} bytes, got {}",
+            raw.len()
+        ))
+    })?;
+    let signature = Signature::from_bytes(&raw);
+    verifying.verify_strict(bytes, &signature).map_err(|error| {
+        Error::Handler(format!(
+            "update artifact signature does not match `update.public_key`: {error}"
+        ))
+    })
 }
 
 /// Manifest, trust and digest rules, independent of the network and the disk.
@@ -616,8 +733,11 @@ const ARTIFACT_CAP: u64 = 256 * 1024 * 1024;
 
 /// Download `url` with a deadline and a cap.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn download(url: &str) -> Result<Vec<u8>, Error> {
-    download_limited(url, DOWNLOAD_TIMEOUT, ARTIFACT_CAP)
+fn download(
+    url: &str,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<Vec<u8>, Error> {
+    download_limited(url, DOWNLOAD_TIMEOUT, ARTIFACT_CAP, on_progress)
 }
 
 /// [`download`] with the bounds as parameters, so a test can use a short
@@ -627,7 +747,10 @@ fn download_limited(
     url: &str,
     timeout: std::time::Duration,
     cap: u64,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
+
     require_trusted_url(url)?;
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
@@ -638,12 +761,60 @@ fn download_limited(
         .get(url)
         .call()
         .map_err(|error| Error::Handler(format!("update download failed: {error}")))?;
-    response
-        .body_mut()
-        .with_config()
-        .limit(cap)
-        .read_to_vec()
-        .map_err(|error| Error::Handler(format!("update download failed: {error}")))
+    let total = response.body().content_length();
+    let mut reader = response.body_mut().as_reader();
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|error| Error::Handler(format!("update download failed: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len() as u64 + read as u64 > cap {
+            return Err(Error::Handler(format!(
+                "update download failed: artifact exceeds {cap} bytes"
+            )));
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        on_progress(bytes.len() as u64, total);
+    }
+    // A final event with a known total, so a page that only listens for the end
+    // still sees one even when the server sent no Content-Length.
+    on_progress(bytes.len() as u64, Some(bytes.len() as u64));
+    Ok(bytes)
+}
+
+/// Rate-limit download progress so a fast local server cannot flood the page.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct ProgressThrottle {
+    last: Option<std::time::Instant>,
+    interval: std::time::Duration,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl ProgressThrottle {
+    fn new(interval: std::time::Duration) -> Self {
+        Self {
+            last: None,
+            interval,
+        }
+    }
+
+    /// Whether this update should be sent: the first one, a finished one, or one
+    /// that is at least `interval` after the previous send.
+    fn ready(&mut self, done: bool) -> bool {
+        let now = std::time::Instant::now();
+        let due = self
+            .last
+            .is_none_or(|last| now.duration_since(last) >= self.interval);
+        if done || due {
+            self.last = Some(now);
+            return true;
+        }
+        false
+    }
 }
 
 /// `target` with `suffix` appended to its file name.
@@ -757,12 +928,29 @@ fn install_platform(
 /// `target` is a parameter so a test can install into a temporary file instead
 /// of replacing the test binary.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn apply_to(update: &UpdateConfig, target: &Path, force: bool) -> Result<Value, Error> {
+fn apply_to(
+    update: &UpdateConfig,
+    target: &Path,
+    force: bool,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<Value, Error> {
     let url = update.url.as_deref().ok_or_else(|| {
         Error::Handler("no update endpoint is configured in `update.url`".to_owned())
     })?;
+    let public_key = update.public_key.as_deref().ok_or_else(|| {
+        Error::Handler(
+            "`update.public_key` is not configured, so an update cannot be verified; add the publisher's base64 Ed25519 key to voussoir.json"
+                .to_owned(),
+        )
+    })?;
     let body = fetch(url)?;
     let release = parse_manifest(&body)?;
+    let signature = release.signature.as_deref().ok_or_else(|| {
+        Error::Handler(
+            "update endpoint has no `signature`; refusing an artifact the configured key cannot authenticate"
+                .to_owned(),
+        )
+    })?;
     if !force && !is_newer(&update.current, &release.version) {
         return Ok(json!({
             "installed": false,
@@ -771,11 +959,39 @@ fn apply_to(update: &UpdateConfig, target: &Path, force: bool) -> Result<Value, 
             "latest": release.version,
         }));
     }
-    let bytes = download(&release.url)?;
+    // A patch is only useful from the exact version it was built against, and
+    // only when the old binary is readable. Either way the reconstructed file
+    // must equal what a full download would have produced.
+    if let Some(patch) = &release.patch {
+        if patch.from == update.current {
+            if let Ok(old) = std::fs::read(target) {
+                let bytes = download(&patch.url, on_progress)?;
+                verify_sha256(&bytes, &patch.sha256)?;
+                if let Some(patch_signature) = &patch.signature {
+                    verify_signature(&bytes, patch_signature, public_key)?;
+                }
+                let rebuilt = crate::delta::apply(&old, &bytes)?;
+                verify_sha256(&rebuilt, &release.sha256)?;
+                verify_signature(&rebuilt, signature, public_key)?;
+                install_bytes(&rebuilt, target)?;
+                return Ok(json!({
+                    "installed": true,
+                    "patched": true,
+                    "version": release.version,
+                    "path": target.display().to_string(),
+                    "notes": release.notes,
+                }));
+            }
+        }
+    }
+
+    let bytes = download(&release.url, on_progress)?;
     verify_sha256(&bytes, &release.sha256)?;
+    verify_signature(&bytes, signature, public_key)?;
     install_bytes(&bytes, target)?;
     Ok(json!({
         "installed": true,
+        "patched": false,
         "version": release.version,
         "path": target.display().to_string(),
         "notes": release.notes,
@@ -792,7 +1008,7 @@ fn install_commands(registry: &mut Registry, update: UpdateConfig) {
     let installed: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
     let record = Arc::clone(&installed);
-    registry.add_async("update.apply", move |_app, payload| {
+    registry.add_async("update.apply", move |app, payload| {
         let force = payload
             .get("force")
             .and_then(Value::as_bool)
@@ -802,7 +1018,17 @@ fn install_commands(registry: &mut Registry, update: UpdateConfig) {
                 "cannot find the running binary to replace: {error}"
             ))
         })?;
-        let result = apply_to(&update, &target, force)?;
+        let mut throttle = ProgressThrottle::new(std::time::Duration::from_millis(150));
+        let mut on_progress = |received: u64, total: Option<u64>| {
+            let done = total.is_some_and(|total| received >= total);
+            if throttle.ready(done) {
+                app.emit(
+                    "update-progress",
+                    json!({ "received": received, "total": total }),
+                );
+            }
+        };
+        let result = apply_to(&update, &target, force, &mut on_progress)?;
         if result.get("installed").and_then(Value::as_bool) == Some(true) {
             *record
                 .lock()
@@ -856,9 +1082,23 @@ fn spawn_and_exit(path: PathBuf) -> Result<(), Error> {
 #[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod install_tests {
     use super::*;
+    use base64::Engine;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener};
     use std::time::Duration;
+
+    /// A deterministic keypair, so the tests do not depend on a random source.
+    fn test_key() -> (SigningKey, String) {
+        let signing = SigningKey::from_bytes(&[42u8; 32]);
+        let public = base64::engine::general_purpose::STANDARD
+            .encode(signing.verifying_key().as_bytes());
+        (signing, public)
+    }
+
+    fn signature(signing: &SigningKey, bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(signing.sign(bytes).to_bytes())
+    }
 
     /// Serve `routes` in order, one connection each, checking the request path.
     fn serve_with(build: impl FnOnce(SocketAddr) -> Vec<(String, Vec<u8>)>) -> SocketAddr {
@@ -912,22 +1152,31 @@ mod install_tests {
         (dir, target)
     }
 
-    fn feed(addr: SocketAddr, version: &str, artifact: &[u8]) -> Vec<u8> {
+    fn feed(signing: &SigningKey, addr: SocketAddr, version: &str, artifact: &[u8]) -> Vec<u8> {
         json!({
             "version": version,
             "notes": "notes",
             "url": format!("http://{addr}/app"),
             "sha256": sha256_hex(artifact),
+            "signature": signature(signing, artifact),
         })
         .to_string()
         .into_bytes()
+    }
+
+    fn update_for(addr: SocketAddr, public: &str) -> UpdateConfig {
+        UpdateConfig {
+            url: Some(format!("http://{addr}/feed")),
+            public_key: Some(public.to_owned()),
+            current: "1.0.0".to_owned(),
+        }
     }
 
     #[test]
     fn a_download_is_bounded() {
         let addr = serve(vec![("/big".to_owned(), vec![b'x'; 4096])]);
         let error =
-            download_limited(&format!("http://{addr}/big"), Duration::from_secs(5), 64)
+            download_limited(&format!("http://{addr}/big"), Duration::from_secs(5), 64, &mut |_, _| {})
                 .unwrap_err();
         assert!(error.to_string().contains("download failed"), "{error}");
     }
@@ -936,7 +1185,7 @@ mod install_tests {
     fn a_download_returns_exactly_the_bytes_served() {
         let addr = serve(vec![("/app".to_owned(), b"binary-ish".to_vec())]);
         let bytes =
-            download_limited(&format!("http://{addr}/app"), Duration::from_secs(5), 1024).unwrap();
+            download_limited(&format!("http://{addr}/app"), Duration::from_secs(5), 1024, &mut |_, _| {}).unwrap();
         assert_eq!(bytes, b"binary-ish");
     }
 
@@ -978,19 +1227,16 @@ mod install_tests {
 
     #[test]
     fn applying_installs_what_the_feed_describes() {
+        let (signing, public) = test_key();
         let artifact = b"new-binary-contents".to_vec();
         let addr = serve_with(|addr| {
             vec![
-                ("/feed".to_owned(), feed(addr, "9.9.9", &artifact)),
+                ("/feed".to_owned(), feed(&signing, addr, "9.9.9", &artifact)),
                 ("/app".to_owned(), artifact.clone()),
             ]
         });
         let (dir, target) = temp_target("apply", b"old");
-        let update = UpdateConfig {
-            url: Some(format!("http://{addr}/feed")),
-            current: "1.0.0".to_owned(),
-        };
-        let result = apply_to(&update, &target, false).unwrap();
+        let result = apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {}).unwrap();
         assert_eq!(result["installed"], true, "{result}");
         assert_eq!(result["version"], "9.9.9");
         assert_eq!(std::fs::read(&target).unwrap(), artifact);
@@ -999,10 +1245,12 @@ mod install_tests {
 
     #[test]
     fn a_tampered_artifact_is_refused_and_the_old_binary_survives() {
+        let (signing, public) = test_key();
         let artifact = b"served-by-the-mirror".to_vec();
         let addr = serve_with(|addr| {
-            let mut feed_body: Value = serde_json::from_slice(&feed(addr, "9.9.9", &artifact))
-                .expect("the test feed is valid JSON");
+            let mut feed_body: Value =
+                serde_json::from_slice(&feed(&signing, addr, "9.9.9", &artifact))
+                    .expect("the test feed is valid JSON");
             feed_body["sha256"] = json!(sha256_hex(b"expected-by-the-feed"));
             vec![
                 ("/feed".to_owned(), feed_body.to_string().into_bytes()),
@@ -1010,11 +1258,7 @@ mod install_tests {
             ]
         });
         let (dir, target) = temp_target("tampered", b"old");
-        let update = UpdateConfig {
-            url: Some(format!("http://{addr}/feed")),
-            current: "1.0.0".to_owned(),
-        };
-        let error = apply_to(&update, &target, false).unwrap_err();
+        let error = apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {}).unwrap_err();
         assert!(error.to_string().contains("failed verification"), "{error}");
         assert_eq!(
             std::fs::read(&target).unwrap(),
@@ -1025,15 +1269,65 @@ mod install_tests {
     }
 
     #[test]
-    fn an_up_to_date_feed_installs_nothing() {
-        let artifact = b"same".to_vec();
-        let addr = serve_with(|addr| vec![("/feed".to_owned(), feed(addr, "1.0.0", &artifact))]);
-        let (dir, target) = temp_target("uptodate", b"old");
-        let update = UpdateConfig {
-            url: Some(format!("http://{addr}/feed")),
+    fn a_bad_signature_is_refused_even_when_the_digest_matches() {
+        let (signing, public) = test_key();
+        let artifact = b"a-mirror-can-keep-the-hash".to_vec();
+        let addr = serve_with(|addr| {
+            let mut feed_body: Value =
+                serde_json::from_slice(&feed(&signing, addr, "9.9.9", &artifact))
+                    .expect("the test feed is valid JSON");
+            feed_body["signature"] = json!(base64::engine::general_purpose::STANDARD.encode([0u8; 64]));
+            vec![
+                ("/feed".to_owned(), feed_body.to_string().into_bytes()),
+                ("/app".to_owned(), artifact.clone()),
+            ]
+        });
+        let (dir, target) = temp_target("signature", b"old");
+        let error = apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {}).unwrap_err();
+        assert!(error.to_string().contains("signature does not match"), "{error}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unconfigured_key_or_unsigned_feed_is_refused() {
+        let (signing, public) = test_key();
+        let artifact = b"artifact".to_vec();
+
+        // A key is required before anything is fetched.
+        let no_key = UpdateConfig {
+            url: Some("http://127.0.0.1:9/feed".to_owned()),
+            public_key: None,
             current: "1.0.0".to_owned(),
         };
-        let result = apply_to(&update, &target, false).unwrap();
+        let (dir, target) = temp_target("nokey", b"old");
+        let error = apply_to(&no_key, &target, false, &mut |_, _| {}).unwrap_err();
+        assert!(error.to_string().contains("update.public_key"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // A configured key requires a signature in the feed.
+        let addr = serve_with(|addr| {
+            let mut feed_body: Value =
+                serde_json::from_slice(&feed(&signing, addr, "9.9.9", &artifact))
+                    .expect("valid JSON");
+            feed_body.as_object_mut().unwrap().remove("signature");
+            vec![("/feed".to_owned(), feed_body.to_string().into_bytes())]
+        });
+        let (dir, target) = temp_target("nosig", b"old");
+        let error = apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {}).unwrap_err();
+        assert!(error.to_string().contains("no `signature`"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_up_to_date_feed_installs_nothing() {
+        let (signing, public) = test_key();
+        let artifact = b"same".to_vec();
+        let addr = serve_with(|addr| {
+            vec![("/feed".to_owned(), feed(&signing, addr, "1.0.0", &artifact))]
+        });
+        let (dir, target) = temp_target("uptodate", b"old");
+        let result = apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {}).unwrap();
         assert_eq!(result["installed"], false, "{result}");
         assert_eq!(result["reason"], "up to date");
         assert_eq!(std::fs::read(&target).unwrap(), b"old");
@@ -1042,19 +1336,16 @@ mod install_tests {
 
     #[test]
     fn force_reinstalls_the_same_version() {
+        let (signing, public) = test_key();
         let artifact = b"same-version-new-build".to_vec();
         let addr = serve_with(|addr| {
             vec![
-                ("/feed".to_owned(), feed(addr, "1.0.0", &artifact)),
+                ("/feed".to_owned(), feed(&signing, addr, "1.0.0", &artifact)),
                 ("/app".to_owned(), artifact.clone()),
             ]
         });
         let (dir, target) = temp_target("force", b"old");
-        let update = UpdateConfig {
-            url: Some(format!("http://{addr}/feed")),
-            current: "1.0.0".to_owned(),
-        };
-        let result = apply_to(&update, &target, true).unwrap();
+        let result = apply_to(&update_for(addr, &public), &target, true, &mut |_, _| {}).unwrap();
         assert_eq!(result["installed"], true, "{result}");
         assert_eq!(std::fs::read(&target).unwrap(), artifact);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1074,6 +1365,126 @@ mod install_tests {
             UpdateConfig::from_config(&crate::Config::default(), "0.2.0").current,
             "0.2.0"
         );
+    }
+
+    #[test]
+    fn signatures_hold_only_for_the_bytes_that_were_signed() {
+        let (signing, public) = test_key();
+        let signed = signature(&signing, b"release-bytes");
+        assert!(verify_signature(b"release-bytes", &signed, &public).is_ok());
+        let error = verify_signature(b"other-bytes", &signed, &public).unwrap_err();
+        assert!(error.to_string().contains("signature does not match"), "{error}");
+        assert!(verify_signature(b"x", &signed, "not-base64").is_err());
+        assert!(verify_signature(b"x", &signed, &public[..8]).is_err());
+    }
+
+    #[test]
+    fn progress_is_rate_limited_but_never_loses_the_end() {
+        let mut throttle = ProgressThrottle::new(Duration::from_secs(60));
+        assert!(throttle.ready(false), "the first update is sent");
+        assert!(!throttle.ready(false), "a burst is coalesced");
+        assert!(throttle.ready(true), "the final update is always sent");
+    }
+
+    #[test]
+    fn a_download_reports_monotonic_progress() {
+        let body = vec![b'x'; 200_000];
+        let addr = serve(vec![("/app".to_owned(), body.clone())]);
+        let mut seen = Vec::new();
+        let bytes = download_limited(
+            &format!("http://{addr}/app"),
+            Duration::from_secs(5),
+            1 << 20,
+            &mut |received, _total| seen.push(received),
+        )
+        .unwrap();
+        assert_eq!(bytes.len(), body.len());
+        assert!(!seen.is_empty());
+        assert!(seen.windows(2).all(|pair| pair[0] <= pair[1]), "{seen:?}");
+        assert_eq!(seen.last().copied(), Some(body.len() as u64));
+    }
+
+    #[test]
+    fn a_patch_rebuilds_the_binary_the_feed_signed() {
+        let (signing, public) = test_key();
+        let old = b"AAAA-old".to_vec();
+        let new = b"AAAA-new".to_vec();
+        // copy "AAAA-" from the old file, then insert "new".
+        let mut patch = b"VSD1".to_vec();
+        patch.push(1);
+        patch.extend_from_slice(&[0, 0, 0, 0, 5, 0, 0, 0]);
+        patch.push(2);
+        patch.extend_from_slice(&[3, 0, 0, 0]);
+        patch.extend_from_slice(b"new");
+        assert_eq!(crate::delta::apply(&old, &patch).unwrap(), new);
+
+        let addr = serve_with(|addr| {
+            let feed_body = json!({
+                "version": "2.0.0",
+                "url": format!("http://{addr}/full"),
+                "sha256": sha256_hex(&new),
+                "signature": signature(&signing, &new),
+                "patches": {
+                    platform_key(): {
+                        "from": "1.0.0",
+                        "url": format!("http://{addr}/patch"),
+                        "sha256": sha256_hex(&patch),
+                        "signature": signature(&signing, &patch),
+                    }
+                },
+            })
+            .to_string()
+            .into_bytes();
+            vec![
+                ("/feed".to_owned(), feed_body),
+                ("/patch".to_owned(), patch.clone()),
+            ]
+        });
+        let (dir, target) = temp_target("patch", &old);
+        let result = apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {})
+            .expect("a valid patch installs");
+        assert_eq!(result["patched"], true, "{result}");
+        assert_eq!(std::fs::read(&target).unwrap(), new);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_patch_that_rebuilds_the_wrong_bytes_is_refused() {
+        let (signing, public) = test_key();
+        let old = b"AAAA-old".to_vec();
+        let expected = b"AAAA-new".to_vec();
+        let mut patch = b"VSD1".to_vec();
+        patch.push(2);
+        patch.extend_from_slice(&[4, 0, 0, 0]);
+        patch.extend_from_slice(b"evil");
+        let addr = serve_with(|addr| {
+            let feed_body = json!({
+                "version": "2.0.0",
+                "url": format!("http://{addr}/full"),
+                "sha256": sha256_hex(&expected),
+                "signature": signature(&signing, &expected),
+                "patches": {
+                    platform_key(): {
+                        "from": "1.0.0",
+                        "url": format!("http://{addr}/patch"),
+                        "sha256": sha256_hex(&patch),
+                        "signature": signature(&signing, &patch),
+                    }
+                },
+            })
+            .to_string()
+            .into_bytes();
+            vec![
+                ("/feed".to_owned(), feed_body),
+                ("/patch".to_owned(), patch.clone()),
+            ]
+        });
+        let (dir, target) = temp_target("badpatch", &old);
+        let error = apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {})
+            .unwrap_err();
+        assert!(error.to_string().contains("failed verification"), "{error}");
+        assert_eq!(std::fs::read(&target).unwrap(), old);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

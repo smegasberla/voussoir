@@ -115,6 +115,40 @@ impl TrayConfig {
         self.quit_on_last_window = false;
         self
     }
+
+    /// Reject a configuration the platform would reject late, or mangle silently.
+    ///
+    /// An icon whose byte count does not match its dimensions fails inside the
+    /// platform library, where the message names neither the icon nor the reason;
+    /// a duplicate id makes two items indistinguishable in the event the page
+    /// receives, and an empty one cannot be addressed at all.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some((rgba, width, height)) = &self.icon {
+            let expected = (*width as usize)
+                .checked_mul(*height as usize)
+                .and_then(|pixels| pixels.checked_mul(4))
+                .ok_or_else(|| "tray icon dimensions overflow".to_owned())?;
+            if *width == 0 || *height == 0 || rgba.len() != expected {
+                return Err(format!(
+                    "tray icon is {width}x{height} and needs {expected} RGBA bytes, got {}",
+                    rgba.len()
+                ));
+            }
+        }
+        let mut seen = std::collections::HashMap::new();
+        for item in &self.items {
+            if item.id.trim().is_empty() {
+                return Err(format!("tray item {:?} has an empty id", item.label));
+            }
+            if seen.insert(item.id.clone(), ()).is_some() {
+                return Err(format!(
+                    "tray items share the id {:?}; each item needs its own",
+                    item.id
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A live tray icon. Dropping it removes the icon from the status area.
@@ -196,6 +230,8 @@ impl TrayHandle {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn build(config: &TrayConfig, handle: &AppHandle) -> Result<TrayHandle, Error> {
     use tray_icon::menu::{CheckMenuItem, Menu, MenuItem as TrayMenuItem};
+
+    config.validate().map_err(Error::Handler)?;
     use tray_icon::{Icon, TrayIconBuilder};
 
     let menu = Menu::new();
@@ -250,6 +286,8 @@ pub fn build(config: &TrayConfig, handle: &AppHandle) -> Result<TrayHandle, Erro
 /// a missing feature rather than a broken one.
 #[cfg(target_os = "android")]
 pub fn build(config: &TrayConfig, _handle: &AppHandle) -> Result<TrayHandle, Error> {
+    config.validate().map_err(Error::Handler)?;
+
     let request = json!({
         "title": config.tooltip,
         "items": config
@@ -312,6 +350,26 @@ pub fn event_payload(id: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_icon_must_match_its_dimensions() {
+        let good = TrayConfig::new("Notes").icon(vec![0; 4 * 16 * 16], 16, 16);
+        assert!(good.validate().is_ok());
+        let bad = TrayConfig::new("Notes").icon(vec![0; 7], 16, 16);
+        let error = bad.validate().unwrap_err();
+        assert!(error.contains("16x16") && error.contains("7"), "{error}");
+        assert!(TrayConfig::new("Notes").icon(vec![0; 4], 0, 1).validate().is_err());
+    }
+
+    #[test]
+    fn ids_must_be_unique_and_non_empty() {
+        let duplicate = TrayConfig::new("Notes")
+            .item(TrayItem::new("open", "Open"))
+            .item(TrayItem::new("open", "Open again"));
+        assert!(duplicate.validate().unwrap_err().contains("share the id"));
+        let empty = TrayConfig::new("Notes").item(TrayItem::new("", "Nameless"));
+        assert!(empty.validate().unwrap_err().contains("empty id"));
+    }
 
     #[test]
     fn config_builder_is_chainable_and_keeps_order() {

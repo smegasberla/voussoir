@@ -456,7 +456,24 @@ impl App {
         };
 
         #[cfg(feature = "tray")]
-        let tray_handle = build_tray(&self.tray, &handle);
+        let (tray_handle, tray_commands) = {
+            let commands: std::collections::HashMap<String, String> = self
+                .tray
+                .as_ref()
+                .map(|config| {
+                    config
+                        .items
+                        .iter()
+                        .filter_map(|item| {
+                            item.command
+                                .clone()
+                                .map(|command| (item.id.clone(), command))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            (build_tray(&self.tray, &handle), commands)
+        };
 
         let mut state = event_loop::LoopState {
             fired: std::sync::Arc::new(Fired::default()),
@@ -488,6 +505,8 @@ impl App {
             show_devtools,
             #[cfg(feature = "menu")]
             menu_commands,
+            #[cfg(feature = "tray")]
+            tray_commands,
             #[cfg(feature = "menu")]
             menu: menu_handle,
             #[cfg(feature = "tray")]

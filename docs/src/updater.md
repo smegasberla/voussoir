@@ -187,7 +187,8 @@ page cannot ask the shell to run an arbitrary path.
   "version": "2.1.0",
   "notes": "Fixes a crash on save.",
   "url": "https://example.com/releases/app-linux-x86_64",
-  "sha256": "9f2c... (64 hex characters)"
+  "sha256": "9f2c... (64 hex characters)",
+  "signature": "base64 Ed25519 over the artifact bytes"
 }
 ```
 
@@ -195,9 +196,9 @@ page cannot ask the shell to run an arbitrary path.
 {
   "version": "2.1.0",
   "downloads": {
-    "linux-x86_64": { "url": "https://example.com/app-linux-x86_64", "sha256": "..." },
-    "macos-aarch64": { "url": "https://example.com/app-macos-aarch64", "sha256": "..." },
-    "windows-x86_64": { "url": "https://example.com/app.exe", "sha256": "..." }
+    "linux-x86_64": { "url": "https://example.com/app-linux-x86_64", "sha256": "...", "signature": "..." },
+    "macos-aarch64": { "url": "https://example.com/app-macos-aarch64", "sha256": "...", "signature": "..." },
+    "windows-x86_64": { "url": "https://example.com/app.exe", "sha256": "...", "signature": "..." }
   }
 }
 ```
@@ -207,11 +208,42 @@ A build reads `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`,
 anything touches the disk.
 
 **The trust model, plainly.** The digest proves the bytes are the ones the feed
-named; it does not prove the feed was right. Authenticity rests on TLS to the URL in
-your config, so `https` is required everywhere except loopback (which is what a test
-server uses). A signature over the manifest, verified with an embedded public key, is
-the stronger design and is not built in: it needs key management the framework does
-not provide, and a hand-rolled scheme would be worse than the TLS it adds to.
+named; the Ed25519 signature proves the publisher produced them, which is what a
+digest alone cannot do. `update.apply` refuses unless `update.public_key` is set and
+the feed carries a `signature`; `https` is still required everywhere except loopback
+for fetching the feed.
+
+Generate the key once per project with `voussoir keygen --out release.pem`. It prints
+the base64 key to paste into `voussoir.json`, and writes the private half with mode
+`0600`. Sign each artifact with `voussoir sign dist/app --key release.pem` and paste
+the `sha256` and `signature` it prints into the feed. The key is raw 32-byte
+Ed25519; the signature is over the artifact's exact bytes, not over the JSON, which
+removes canonicalization from the trust path.
+
+**Patch updates.** A feed may offer a delta from one older version:
+
+```json
+"patches": {
+  "linux-x86_64": {
+    "from": "2.0.0",
+    "url": "https://example.com/2.0.0-to-2.1.0.patch",
+    "sha256": "...",
+    "signature": "..."
+  }
+}
+```
+
+When the running `version` equals `from`, `update.apply` downloads the patch, checks
+it, applies it to the running binary, and then verifies the reconstructed file
+against the feed's `sha256` **and** `signature`, exactly as a full download would be.
+A patch that produces anything else is refused and the old binary stays. Build one
+with `voussoir patch old new --out app.patch --from 2.0.0 --key release.pem`; the
+format is copy-runs-and-inserts, documented in `voussoir/src/delta.rs`.
+
+**Progress.** While `update.apply` downloads it emits
+`voussoir.listen("update-progress", ({received, total}) => ...)`, at most every
+150 ms plus one final event whose `received` equals `total`. `total` is `null` when
+the server sends no `Content-Length`.
 
 On Unix the new file takes the old one's mode and is renamed over it, which a running
 process allows. Windows refuses to replace a running executable but allows renaming
@@ -232,12 +264,12 @@ silently failing.
 
 ## What is not built in
 
-- **No signature over the manifest.** The digest catches corruption and a swapped
-  artifact, but authenticity is TLS to your endpoint. Verified-release signing needs
-  key management the framework does not provide.
-- **No delta patching.** Every update is the whole binary.
-- **No progress UI.** `update.apply` resolves once; show an indeterminate spinner,
-  and offer the browser instead if the file is large.
+- **No key rotation.** One `update.public_key` per config; switching keys means
+  shipping a build with the new one.
+- **No automatic rollback.** A failed check or install leaves the old binary in
+  place, but a build that starts and then crashes is the app's problem to detect.
+- **No background updates.** `update.apply` runs when the page asks; nothing checks
+  on a timer, because that decision belongs to the app's UX and its store policy.
 
 Each of these is a decision with a security implication, and a framework that makes
 it for you is a framework that makes it wrong for someone.

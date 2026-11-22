@@ -7,6 +7,9 @@
 
 import { parseArgs, type Args } from "./args.ts";
 import { fail } from "./proc.ts";
+import { keygen, sign as signArtifact } from "./commands/keys.ts";
+import { patch } from "./commands/patch.ts";
+import { update } from "./commands/update.ts";
 import { init } from "./commands/init.ts";
 import { dev } from "./commands/dev.ts";
 import { build } from "./commands/build.ts";
@@ -27,6 +30,10 @@ Commands
   build          bundle the frontend and compile the release binary
   package        build, then wrap the binary in a platform installer
   android build  cross-compile and package an APK (or AAB with --aab)
+  keygen         create the Ed25519 key that signs releases
+  sign           print the sha256 and signature for a release artifact
+  patch          build the delta between two release artifacts
+  update         replace this CLI from a release feed (--check to only ask)
   android run    install and launch on a device or emulator
   ios build      cross-compile and build the simulator app (or --target device)
   ios run        install and launch on a booted iOS simulator
@@ -43,6 +50,12 @@ Options
   --size         build: print the binary size
   --out <path>   build: copy the binary somewhere, creating its parent
   --wait         android run: keep streaming device logs until Ctrl-C
+  --key <path>   sign: the Ed25519 private key (default voussoir-signing-key.pem)
+  --out <path>   keygen: where to write the private key
+  --from <ver>   patch: the version the patch upgrades from
+  --feed <url>   update: the release feed (or VOUSSOIR_CLI_FEED)
+  --check        update: report the newest version without downloading
+  --force        update: install even if the feed is not newer
   --icon <path>  package: application icon (256x256 PNG or .icns)
   --identifier   package: reverse-DNS id (default: derived from the app name)
   --package      init: Android package name (default: com.voussoir.<app>)
@@ -92,6 +105,18 @@ switch (args.command) {
     break;
   case "package":
     code = await runPackage(args);
+    break;
+  case "keygen":
+    code = keygen(args);
+    break;
+  case "sign":
+    code = signArtifact(args);
+    break;
+  case "patch":
+    code = patch(args);
+    break;
+  case "update":
+    code = await update(args);
     break;
   case "android": {
     // `voussoir android <subcommand>`: the second positional names the action.

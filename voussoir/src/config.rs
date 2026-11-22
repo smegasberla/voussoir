@@ -34,6 +34,12 @@ pub struct Config {
     pub window_commands: HashMap<String, Vec<String>>,
     /// Update endpoint, read by the `updater` feature. `None` disables checks.
     pub update_url: Option<String>,
+    /// Base64 Ed25519 public key an update artifact must be signed with.
+    ///
+    /// Installing requires this: without it the shell could only prove the bytes
+    /// match the feed, not that the publisher produced them. `None` leaves
+    /// `update.check` working and makes `update.apply` refuse.
+    pub update_public_key: Option<String>,
     /// How long the page waits for a command before rejecting the promise.
     ///
     /// A fetch with no deadline waits forever, so a handler that deadlocks made
@@ -60,6 +66,7 @@ impl Default for Config {
             commands: None,
             window_commands: HashMap::new(),
             update_url: None,
+            update_public_key: None,
             command_timeout_ms: DEFAULT_COMMAND_TIMEOUT_MS,
         }
     }
@@ -105,6 +112,13 @@ impl Config {
         {
             config.update_url = Some(url.to_owned());
         }
+        if let Some(key) = map
+            .get("update")
+            .and_then(|u| u.get("public_key"))
+            .and_then(Value::as_str)
+        {
+            config.update_public_key = Some(key.trim().to_owned());
+        }
         if let Some(ms) = map.get("command_timeout_ms").and_then(Value::as_u64) {
             config.command_timeout_ms = ms;
         }
@@ -127,6 +141,26 @@ impl Config {
                     config.window_commands.insert(label.clone(), names);
                 }
             }
+        }
+
+        if !config.width.is_finite()
+            || config.width <= 0.0
+            || !config.height.is_finite()
+            || config.height <= 0.0
+        {
+            return Err(format!(
+                "width and height must be positive finite numbers, got {}x{}",
+                config.width, config.height
+            ));
+        }
+        if config.entry.split('/').any(|segment| segment == "..") || config.entry.contains('\\') {
+            return Err(format!(
+                "entry {:?} must stay inside the served root",
+                config.entry
+            ));
+        }
+        if matches!(&config.version, Some(version) if version.trim().is_empty()) {
+            return Err("version must not be empty when set".to_owned());
         }
 
         Ok(config)
@@ -205,6 +239,16 @@ mod tests {
         // A malformed update block is ignored rather than fatal.
         let c = Config::from_json(r#"{"update":{"url":42}}"#).unwrap();
         assert!(c.update_url.is_none());
+    }
+
+    #[test]
+    fn impossible_sizes_and_escaping_entries_are_refused() {
+        assert!(Config::from_json(r#"{"width":0}"#).is_err());
+        assert!(Config::from_json(r#"{"height":-1}"#).is_err());
+        let error = Config::from_json(r#"{"entry":"../secret.html"}"#).unwrap_err();
+        assert!(error.contains("served root"), "{error}");
+        assert!(Config::from_json(r#"{"entry":"sub\\page.html"}"#).is_err());
+        assert!(Config::from_json(r#"{"version":"  "}"#).is_err());
     }
 
     #[test]

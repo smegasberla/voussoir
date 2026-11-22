@@ -39,6 +39,10 @@ pub(crate) struct LoopState {
     pub(crate) show_devtools: bool,
     #[cfg(feature = "menu")]
     pub(crate) menu_commands: std::collections::HashMap<String, String>,
+    /// Commands a tray item names, keyed by item id. A tray click emits the same
+    /// event a menu click does, so it runs its command the same way.
+    #[cfg(feature = "tray")]
+    pub(crate) tray_commands: std::collections::HashMap<String, String>,
     /// The live menu bar, if the app declared one. Kept here because the native
     /// object is not `Send` and a runtime update has to be applied on this
     /// thread.
@@ -140,6 +144,10 @@ pub(crate) fn dispatch(
             state
                 .handle
                 .emit_to_all("tray", serde_json::json!({ "id": id }));
+            #[cfg(feature = "tray")]
+            if let Some(command) = state.tray_commands.get(&id) {
+                state.handle.run_command(command, Value::Null);
+            }
         }
         Event::UserEvent(UserEvent::Menu(id)) => {
             state

@@ -64,6 +64,10 @@ Three rules:
 | `ios verify` | build, install, launch, assert the Rust entry ran | Xcode |
 | `docs` | validate `docs/src`, then build the website | Bun |
 | `doctor` | check the toolchain and report what is missing | nothing |
+| `keygen` | create the Ed25519 key that signs releases | nothing |
+| `sign` | print the `sha256` and `signature` for an artifact | the signing key |
+| `patch` | build the delta between two artifacts | the signing key, optionally |
+| `update` | replace the CLI from a release feed | `--feed` (or `VOUSSOIR_CLI_FEED`) |
 
 ## `init`
 
@@ -270,6 +274,24 @@ the entry page and the native manifest. Every check reads something real: a bina
 that is two layers downstream of a tool that was never installed. The full list of
 checks is in [Installing Voussoir](install.md).
 
+## Release signing
+
+The shell's updater requires an Ed25519 signature, and these commands produce it.
+The private key stays on the machine that cuts the release.
+
+```bash
+voussoir keygen --out release.pem          # prints the base64 key for voussoir.json
+voussoir sign dist/app --key release.pem   # sha256 + signature, paste into the feed
+voussoir patch old-app new-app --out app.patch --from 2.0.0 --key release.pem
+```
+
+`keygen` writes the PKCS#8 private key with mode `0600` and prints
+`update.public_key` for `voussoir.json`. `sign` prints JSON with a `sha256` and a
+`signature` over the artifact's exact bytes. `patch` additionally writes the delta
+and prints both field sets: the patch's own hash/signature and the rebuilt
+artifact's, because the updater checks the restored binary against the artifact's
+signature. The shell's side is in [Updating the app](updater.md).
+
 ## Theory: what the CLI will never do
 
 These are decisions, not gaps waiting to be filled:
@@ -279,9 +301,10 @@ These are decisions, not gaps waiting to be filled:
   install step to own.
 - **No `publish` command.** Uploading to a store or a registry needs credentials,
   and a build tool should not hold yours.
-- **No `update` command.** Upgrading is re-running the installer or pulling the
-  repository. There is no self-replacing binary, because a tool that can overwrite
-  itself is a tool that can break itself.
+- **No implicit self-update.** `voussoir update` exists, but it only runs when you
+  ask and only against the feed you name; there is no background check, no default
+  release server, and no signature authority for the CLI. It verifies the download's
+  `sha256` and renames it into place, and `--check` reports without installing.
 - **No global state.** Every command reads and writes the project directory and the
   standard toolchain locations, nothing else. Two projects never interfere, and a
   CI cache is the only thing that survives a clean checkout.
