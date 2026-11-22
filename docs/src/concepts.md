@@ -294,11 +294,11 @@ app should not pay for what it does not use:
 
 | Feature | Adds | Why it is separate |
 | --- | --- | --- |
-| `full` | menu, dialogs, updater, devtools, storage | most apps want these |
+| `full` | menu, dialogs, updater, storage | most apps want these; devtools stays out so releases do not carry it |
 | `storage` | the `storage.*` commands | a minimal shell may want no filesystem story |
 | `rt` | a shared async runtime, so `async_fn` exists | it pulls in a task scheduler |
 | `tray` | tray icon support | it implies a background process model |
-| `devtools` | the ability to open devtools | shipping it is a debugging hazard |
+| `devtools` | the ability to open devtools | shipping it is a debugging hazard; `voussoir dev` turns it on |
 | `hot-reload` | loading the commands library at runtime | dev only, never in a release build |
 
 Two consequences to internalise. First, **a feature you did not enable makes its

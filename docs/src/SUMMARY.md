@@ -35,6 +35,7 @@ If you read nothing else, read [Concepts](concepts.md) and then
 - [Testing](testing.md)
 - [Packaging](packaging.md)
   - [Updating the app](updater.md)
+- [Size and speed](size.md)
   - [Android and iOS](mobile.md)
 - [Operations](operations.md)
   - [Diagnostics](diagnostics.md)

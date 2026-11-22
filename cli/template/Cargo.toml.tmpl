@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# `full` turns on the native menu bar, file dialogs, update checks, and devtools
-# in release builds. `storage` adds the JSON-file key/value store the page
-# reaches as `storage.get|set|delete|keys|path`. Drop either to slim the shell;
-# add `rt` when you want `async fn` commands on a shared runtime.
+# `full` turns on the native menu bar, file dialogs and update checks. `storage`
+# adds the JSON-file key/value store the page reaches as
+# `storage.get|set|delete|keys|path`. Drop either to slim the shell; add `rt` when
+# you want `async fn` commands on a shared runtime, and `devtools` only if you
+# want F12 in a build that is not `voussoir dev`.
 voussoir = { {{VOUSSOIR_PATH_INNER}}, features = ["full", "storage"] }
 # The command table. Release links it statically; `voussoir dev` additionally
 # builds it as a cdylib and hot-swaps it into the running shell.

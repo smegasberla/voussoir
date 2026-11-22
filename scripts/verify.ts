@@ -360,9 +360,10 @@ async function main() {
   // 4. Size and composition of the shipped artifact.
   {
     const size = statSync(binary).size;
-    // The scaffold enables `full` (menu, dialogs, updater, devtools), so this
-    // covers the realistic app, not the bare shell. Still two orders of
-    // magnitude under Electron's ~120 MB.
+    // The scaffold enables `full` (menu, dialogs, updater, storage) and the CLI
+    // adds LTO, one codegen unit and stripping even on an older manifest, so
+    // this covers the realistic shipped app, not the bare shell. Still two
+    // orders of magnitude under Electron's ~120 MB.
     record("binary size", size < 8 * 1024 * 1024, `${(size / 1048576).toFixed(2)} MB`);
   }
   {

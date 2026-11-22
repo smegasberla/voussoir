@@ -85,11 +85,35 @@ export function project(): Project {
   return p;
 }
 
+/** The size settings every release build gets, even from a Cargo.toml that was
+ *  scaffolded before these defaults existed.
+ *
+ *  LTO, one codegen unit and stripping are supported by every target rustc does,
+ *  so they can be applied from the command line without a per-platform branch.
+ *  An app that wants the debug symbols back can still build with `--debug`, and
+ *  `cargo` keeps the non-release profile untouched.
+ */
+export function releaseSizeArgs(): string[] {
+  return [
+    "--config",
+    "profile.release.lto=true",
+    "--config",
+    "profile.release.codegen-units=1",
+    "--config",
+    "profile.release.strip=true",
+  ];
+}
+
+/** Append the release size flags to any cargo invocation. */
+export function withReleaseSize(args: string[]): string[] {
+  return [...args, ...releaseSizeArgs()];
+}
+
 /** Build the Rust binary, optionally with the release profile. */
 export async function cargoBuild(project: Project, release: boolean): Promise<string> {
   const crate = crateDir(project);
   const args = ["cargo", "build"];
-  if (release) args.push("--release");
+  if (release) args.push("--release", ...releaseSizeArgs());
   await run(args, { cwd: crate });
   // Windows suffixes cargo binaries with .exe; stat'ing the bare name reports
   // "cargo finished but ... is missing" on every successful build there.

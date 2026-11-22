@@ -44,6 +44,16 @@ pub fn lookup<'a>(assets: AssetTable, path: &str) -> Option<(&'a str, Cow<'a, [u
 }
 
 fn find<'a>(assets: AssetTable, path: &str) -> Option<(&'a str, Cow<'a, [u8]>)> {
+    // The generator sorts by path, so a page that requests many modules pays a
+    // binary search instead of a scan. A table from an older generator may be
+    // unsorted: a miss then falls back to the scan, and an accidental hit is
+    // still a genuine match because binary_search only reports exact equality.
+    if assets.len() > 8 {
+        if let Ok(index) = assets.binary_search_by(|(name, _)| (*name).cmp(path)) {
+            let (name, bytes) = assets[index];
+            return Some((name, Cow::Borrowed(bytes)));
+        }
+    }
     assets
         .iter()
         .find(|(name, _)| *name == path)
@@ -103,6 +113,28 @@ mod tests {
         assert_eq!(lookup(ASSETS, "/notes/42").unwrap().0, "index.html");
         assert_eq!(lookup(ASSETS, "/docs/").unwrap().0, "index.html");
         assert_eq!(lookup(ASSETS, "/settings/about").unwrap().0, "index.html");
+    }
+
+    #[test]
+    fn a_large_sorted_table_finds_files_and_falls_back_for_old_tables() {
+        static SORTED: &[(&str, &[u8])] = &[
+            ("a.js", b"a"), ("b.js", b"b"), ("c.js", b"c"), ("d.js", b"d"),
+            ("e.js", b"e"), ("f.js", b"f"), ("g.js", b"g"), ("h.js", b"h"),
+            ("index.html", b"index"), ("z.js", b"z"),
+        ];
+        assert_eq!(lookup(SORTED, "/index.html").unwrap().0, "index.html");
+        assert_eq!(lookup(SORTED, "/c.js").unwrap().0, "c.js");
+        assert!(lookup(SORTED, "/missing.js").is_none());
+
+        // An older generated table is not guaranteed to be sorted; the scan
+        // fallback keeps it authoritative.
+        static UNSORTED: &[(&str, &[u8])] = &[
+            ("z.js", b"z"), ("b.js", b"b"), ("c.js", b"c"), ("d.js", b"d"),
+            ("e.js", b"e"), ("f.js", b"f"), ("g.js", b"g"), ("h.js", b"h"),
+            ("index.html", b"index"), ("a.js", b"a"),
+        ];
+        assert_eq!(lookup(UNSORTED, "/a.js").unwrap().0, "a.js");
+        assert_eq!(lookup(UNSORTED, "/z.js").unwrap().0, "z.js");
     }
 
     #[test]

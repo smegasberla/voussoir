@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
-import { bundle, writeAssetTable } from "../pipeline.ts";
+import { bundle, writeAssetTable, withReleaseSize } from "../pipeline.ts";
 import { requireProject, type Project } from "../project.ts";
 import { checkParity } from "../parity.ts";
 import { run } from "../proc.ts";
@@ -125,7 +125,7 @@ export async function build(args: Args): Promise<number> {
     [`CARGO_TARGET_${abiSpec.target.replace(/-/g, "_").toUpperCase()}_LINKER`]: clang,
   };
 
-  await run(["cargo", "build", "--release", "--target", abiSpec.target], {
+  await run(withReleaseSize(["cargo", "build", "--release", "--target", abiSpec.target]), {
     cwd: android,
     env,
   });

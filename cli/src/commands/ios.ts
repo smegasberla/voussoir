@@ -14,7 +14,7 @@
 import { existsSync, mkdirSync, copyFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
-import { bundle, writeAssetTable } from "../pipeline.ts";
+import { bundle, writeAssetTable, withReleaseSize } from "../pipeline.ts";
 import { requireProject, type Project } from "../project.ts";
 import { checkParity } from "../parity.ts";
 import { run } from "../proc.ts";
@@ -87,7 +87,7 @@ export async function build(args: Args): Promise<number> {
 
   const env = { ...process.env };
 
-  await run(["cargo", "build", "--release", "--target", spec.target], {
+  await run(withReleaseSize(["cargo", "build", "--release", "--target", spec.target]), {
     cwd: ios,
     env,
   });

@@ -116,14 +116,17 @@ export function devEnv(port: number, verbose: boolean, base: Record<string, stri
   } as Record<string, string>;
 }
 
-/** The shell launch, feature flag included only when the scaffold has it.
+/** The shell launch, feature flags included only when the scaffold has them.
  *
  *  Exported so a test can pin the difference: a pre-hot-reload scaffold must run
  *  plain `cargo run`, while a current one asks for `--features hot-reload`.
+ *  Devtools belongs here, not in `full`: development wants the inspector, and a
+ *  release build should not carry it. An old scaffold keeps its old behavior
+ *  (no flags), which also means no devtools until it adds the feature.
  */
 export function featuresFor(supportsHotReload: boolean): string[] {
   return supportsHotReload
-    ? ["cargo", "run", "--features", "hot-reload"]
+    ? ["cargo", "run", "--features", "hot-reload,devtools"]
     : ["cargo", "run"];
 }
 

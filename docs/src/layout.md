@@ -149,7 +149,8 @@ works in release builds too, so you do not need two versions of the code. See
 voussoir = { path = "...", features = ["full", "storage"] }
 ```
 
-- `full` is `menu + dialogs + updater + devtools + storage`.
+- `full` is `menu + dialogs + updater + storage` (devtools is a dev-only
+  addition).
 - `storage` is therefore already in `full`, and is listed again so that turning
   `full` down still leaves a store an app can use.
 

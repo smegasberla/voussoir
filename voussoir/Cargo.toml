@@ -72,7 +72,7 @@ rt = ["dep:tokio", "dep:futures-util"]
 # no filesystem story it does not need.
 storage = []
 # Everything a "real app" normally needs.
-full = ["menu", "dialogs", "updater", "devtools", "storage"]
+full = ["menu", "dialogs", "updater", "storage"]
 
 
 [[example]]

@@ -242,10 +242,10 @@ Optional capabilities are cargo features, so a minimal app links none of them.
 | `tray` | `tray-icon` | system tray icon (implies `menu`) |
 | `dialogs` | `rfd` | native open/save/folder dialogs |
 | `updater` | `ureq` + rustls | update checks against your JSON endpoint |
-| `devtools` | `wry/devtools` | devtools in release builds |
+| `devtools` | `wry/devtools` | devtools in release builds; `voussoir dev` enables it |
 | `storage` | — | JSON settings file in the platform data directory |
 | `rt` | `tokio` (scheduler only) | real `async fn` commands on a shared runtime |
-| `full` | several of the above | menu + dialogs + updater + devtools + storage |
+| `full` | several of the above | menu + dialogs + updater + storage; devtools is dev-only |
 
 `voussoir init` scaffolds with `full`. The Android example in this repository adds
 `tray` on top, because its notification is what proves that path on a device.
