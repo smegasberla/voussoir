@@ -371,6 +371,7 @@ struct Patch {
 }
 
 /// The key a manifest uses for this build's artifact.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn platform_key() -> &'static str {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
@@ -407,6 +408,7 @@ fn platform_key() -> &'static str {
 /// every release. `sha256` is mandatory: an update that cannot be checked
 /// against the feed must not be installed, because a truncated download of a
 /// binary is not a smaller bug than a malicious one.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn parse_manifest(body: &str) -> Result<Release, Error> {
     let value: Value = serde_json::from_str(body)
         .map_err(|e| Error::Handler(format!("update endpoint returned invalid JSON: {e}")))?;
@@ -492,6 +494,7 @@ fn parse_manifest(body: &str) -> Result<Release, Error> {
 }
 
 /// Read one platform's patch entry.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn parse_patch(entry: &Value) -> Result<Patch, Error> {
     let text = |field: &str| {
         entry
@@ -521,6 +524,7 @@ fn parse_patch(entry: &Value) -> Result<Patch, Error> {
 ///
 /// Plain HTTP is accepted only for loopback, which is what a test server and a
 /// local release directory use; a real feed has to be TLS.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn require_trusted_url(url: &str) -> Result<(), Error> {
     if url.starts_with("https://") {
         return Ok(());
@@ -537,6 +541,7 @@ fn require_trusted_url(url: &str) -> Result<(), Error> {
 }
 
 /// The lowercase hex SHA-256 of `bytes`.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes)
@@ -546,6 +551,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Check that an expected digest is well formed before downloading anything.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn check_sha256_text(expected: &str) -> Result<(), Error> {
     let normalized = expected.trim().to_ascii_lowercase();
     let looks_right = normalized.len() == 64 && normalized.bytes().all(|b| b.is_ascii_hexdigit());
@@ -558,6 +564,7 @@ fn check_sha256_text(expected: &str) -> Result<(), Error> {
 }
 
 /// The digest check, which is what makes a download safe to install at all.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), Error> {
     let actual = sha256_hex(bytes);
     if actual == expected.trim().to_ascii_lowercase() {
@@ -570,10 +577,13 @@ fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), Error> {
 }
 
 /// The exact length of an Ed25519 public key and signature.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const PUBLIC_KEY_LEN: usize = 32;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const SIGNATURE_LEN: usize = 64;
 
 /// Decode the base64 public key from `update.public_key`.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn decode_public_key(text: &str) -> Result<[u8; PUBLIC_KEY_LEN], Error> {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
@@ -596,6 +606,7 @@ fn decode_public_key(text: &str) -> Result<[u8; PUBLIC_KEY_LEN], Error> {
 /// This is what makes a feed trustworthy, which a digest alone cannot do: the
 /// digest proves the bytes match the feed, and the signature proves the feed's
 /// publisher produced them.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn verify_signature(bytes: &[u8], signature: &str, public_key: &str) -> Result<(), Error> {
     use base64::Engine;
     use ed25519_dalek::{Signature, VerifyingKey};
