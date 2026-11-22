@@ -1,6 +1,7 @@
 /** `voussoir build`: bundle the frontend, embed it, compile the shell. */
 
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   bundle,
   cargoBuild,
@@ -38,9 +39,16 @@ export async function build(args: Args): Promise<number> {
 
   const out = stringFlag(args, "out");
   if (out) {
-    await Bun.write(join(process.cwd(), out), Bun.file(binary));
+    await Bun.write(ensureOutDir(out), Bun.file(binary));
     console.log(`  copied to ${out}`);
   }
 
   return 0;
+}
+
+/** Create the parent of `--out` so `--out release/app` works on the first run. */
+export function ensureOutDir(out: string, cwd = process.cwd()): string {
+  const destination = join(cwd, out);
+  mkdirSync(dirname(destination), { recursive: true });
+  return destination;
 }

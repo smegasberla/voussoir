@@ -40,6 +40,7 @@ voussoir android build --aab      # signed App Bundle for Play
 voussoir android build --abi x86_64 --api 30
 voussoir android build --release  # signed release APK
 voussoir android run              # install and launch on a device or emulator
+voussoir android run --wait       # same, then keep streaming device logs
 ```
 
 `voussoir init` scaffolds `android/` as a Gradle project, so nothing is generated at

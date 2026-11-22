@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { assetTable } from "./assets.ts";
 import { crateDir, requireProject, type Project } from "./project.ts";
 import { run } from "./proc.ts";
@@ -48,12 +48,29 @@ export function ensureToolchain(): void {
 }
 
 /** A Rust build needs a few hundred megabytes; running out mid-compile produces
- *  "could not compile <random crate>" errors that look like code problems. */
+ *  "could not compile <random crate>" errors that look like code problems.
+ *
+ *  The check follows the volume the build writes to: `CARGO_TARGET_DIR` when it
+ *  is set, else the working directory. Asking `df` about `/` was wrong whenever
+ *  the project lived on another mount, and `df` does not exist on Windows, where
+ *  spawning it used to throw and fail every build. There the check is skipped.
+ */
 export function ensureDiskSpace(needMb = 1500): void {
-  const free = Bun.spawnSync(["df", "-Pm", "/"]);
-  if (free.exitCode !== 0) return;
-  const line = free.stdout.toString().trim().split("\n")[1] ?? "";
-  const available = Number(line.split(/\s+/)[3]);
+  if (!Bun.which("df")) return;
+  const target = process.env.CARGO_TARGET_DIR
+    ? resolve(process.env.CARGO_TARGET_DIR)
+    : process.cwd();
+  let available: number;
+  try {
+    const free = Bun.spawnSync(["df", "-Pm", target]);
+    if (free.exitCode !== 0) return;
+    const line = free.stdout.toString().trim().split("\n")[1] ?? "";
+    available = Number(line.split(/\s+/)[3]);
+  } catch {
+    // A platform without a runnable `df` must not fail the build over a check
+    // whose whole job is a friendlier error.
+    return;
+  }
   if (Number.isFinite(available) && available < needMb) {
     throw new Error(
       `only ${available} MB free where the build runs, need about ${needMb} MB.\n` +

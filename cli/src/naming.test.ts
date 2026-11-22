@@ -52,9 +52,18 @@ describe("identifiers", () => {
     expect(ids.leaf).toBe("notes");
   });
 
-  test("a single-segment package still yields a domain", () => {
-    const ids = identifiers("Notes", "notes");
-    expect(ids.domain).toBe("com");
-    expect(ids.leaf).toBe("notes");
+  test("refuses a package the Android toolchain cannot accept", () => {
+    // Each of these used to reach the Gradle namespace and the JNI symbols and
+    // then fail at launch, where the cause is a mile from the name.
+    expect(() => identifiers("Notes", "notes")).toThrow(/package name/);
+    expect(() => identifiers("Notes", "Notes.App")).toThrow(/lowercase/);
+    expect(() => identifiers("Notes", "com.exa mple")).toThrow(/lowercase/);
+    expect(() => identifiers("Notes", "com.example.")).toThrow(/lowercase/);
+    expect(() => identifiers("Notes", "com.example.class")).toThrow(/keyword/);
+  });
+
+  test("keeps a reviewed lowercase package untouched", () => {
+    const ids = identifiers("Notes", "dev.example.notes_2");
+    expect(ids.package).toBe("dev.example.notes_2");
   });
 });

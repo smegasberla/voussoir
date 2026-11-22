@@ -19,7 +19,7 @@
  *  generation and the compiler error is the feedback.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, type Dirent, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "../proc.ts";
 import { writeAssetTable } from "../pipeline.ts";
@@ -28,7 +28,7 @@ import { boolFlag, stringFlag, type Args } from "../args.ts";
 
 export async function dev(args: Args): Promise<number> {
   const project = requireProject();
-  const port = Number(stringFlag(args, "port") ?? 5177);
+  const port = parsePort(stringFlag(args, "port"));
   const crate = crateDir(project);
   // The shell reads this itself; the CLI only has to hand it over. Turning it
   // off explicitly matters when a shell profile already exports it for every
@@ -46,9 +46,17 @@ export async function dev(args: Args): Promise<number> {
 
   const server = await startServer(project.root, project.config.entry, port);
 
-  // A scaffold from before hot reload has no `hot-reload` feature to enable;
-  // running it the old way is correct, just without the command loop.
-  const hotSupported = readFileSync(join(crate, "Cargo.toml"), "utf8").includes("hot-reload");
+  // A frontend-only (`init --mobile`) scaffold has no `native/` crate, and a
+  // scaffold from before hot reload has no `hot-reload` feature to enable. Both
+  // run the old way, just without the command loop; reading the manifest
+  // unguarded used to crash the whole dev server on the former.
+  const manifest = join(crate, "Cargo.toml");
+  const supportsHotReload = hotSupported(crate);
+  if (!existsSync(manifest)) {
+    console.log(
+      "  no Rust crate to watch here (frontend-only scaffold); native changes need `voussoir build`",
+    );
+  }
   const hotDir = join(crate, "target", "voussoir-hot");
   const artifact = join(crate, "target", "debug", dylibName());
 
@@ -61,7 +69,7 @@ export async function dev(args: Args): Promise<number> {
     console.log("  verbose: reloads, slow commands and refused navigations are recorded");
   }
 
-  if (hotSupported) {
+  if (supportsHotReload) {
     // Generation 1 exists before the shell starts, so its first load is
     // deterministic instead of racing this process's own build.
     initial = await rebuild(crate, hotDir, artifact, 1);
@@ -75,7 +83,7 @@ export async function dev(args: Args): Promise<number> {
   // `--features` only for a scaffold that declares the feature. An old
   // scaffold would otherwise fail before it starts: cargo errors on the flag.
   const shell = spawn(
-    featuresFor(hotSupported),
+    featuresFor(supportsHotReload),
     { cwd: crate, env },
   );
 
@@ -113,8 +121,8 @@ export function devEnv(port: number, verbose: boolean, base: Record<string, stri
  *  Exported so a test can pin the difference: a pre-hot-reload scaffold must run
  *  plain `cargo run`, while a current one asks for `--features hot-reload`.
  */
-export function featuresFor(hotSupported: boolean): string[] {
-  return hotSupported
+export function featuresFor(supportsHotReload: boolean): string[] {
+  return supportsHotReload
     ? ["cargo", "run", "--features", "hot-reload"]
     : ["cargo", "run"];
 }
@@ -210,14 +218,33 @@ function watchCommands(
   return () => clearInterval(timer);
 }
 
-/** Every `.rs` file under `dir` with its mtime; missing dir is an empty map. */
-function snapshot(dir: string): Map<string, number> {
+/** Every `.rs` file under `dir` with its mtime; missing dir is an empty map.
+ *
+ *  The poller runs inside `setInterval`, where a throw is an uncaught exception
+ *  that kills the dev process. A file deleted between the directory listing and
+ *  the `stat` (an editor swap file, `git checkout`) is normal, so a vanished
+ *  entry is skipped and an unreadable directory ends that branch of the walk.
+ */
+export function snapshot(dir: string): Map<string, number> {
   const found = new Map<string, number>();
   const walk = (current: string) => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
       const full = join(current, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".rs")) found.set(full, statSync(full).mtimeMs);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name.endsWith(".rs")) {
+        try {
+          found.set(full, statSync(full).mtimeMs);
+        } catch {
+          // Gone between the listing and this stat; not a reason to crash.
+        }
+      }
     }
   };
   if (existsSync(dir)) walk(dir);
@@ -239,18 +266,56 @@ async function startServer(root: string, entry: string, port: number) {
     process.exit(1);
   }
 
-  const server = Bun.serve({
-    port,
-    development: true,
-    routes: {
-      "/": page as never,
-      [`/${entry}`]: page as never,
-    },
-    fetch(req) {
-      return new Response(`not found: ${new URL(req.url).pathname}`, { status: 404 });
-    },
-  });
+  try {
+    const server = Bun.serve({
+      port,
+      development: true,
+      routes: {
+        "/": page as never,
+        [`/${entry}`]: page as never,
+      },
+      fetch(req) {
+        return new Response(`not found: ${new URL(req.url).pathname}`, { status: 404 });
+      },
+    });
 
-  console.log(`  dev server http://127.0.0.1:${server.port}/`);
-  return server;
+    console.log(`  dev server http://127.0.0.1:${server.port}/`);
+    return server;
+  } catch (error) {
+    // Bun throws raw EADDRINUSE, which surfaced as a stack trace instead of the
+    // one thing the user needs to know: pick another port.
+    throw new Error(serveErrorText(port, error));
+  }
+}
+
+/** The user-facing text for a port Bun would not listen on. */
+export function serveErrorText(port: number, error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  if (/EADDRINUSE|address already in use/i.test(text)) {
+    return `port ${port} is already in use; try \`--port <another number>\``;
+  }
+  return `could not start the dev server on port ${port}: ${text}`;
+}
+
+/** Parse `--port`, refusing instead of handing Bun a value it will throw on. */
+export function parsePort(raw: string | undefined): number {
+  const text = (raw ?? "5177").trim();
+  if (!/^[0-9]+$/.test(text)) {
+    throw new Error(`\`--port ${raw}\` is not a port number; give a whole number from 1 to 65535`);
+  }
+  const port = Number(text);
+  if (port < 1 || port > 65535) {
+    throw new Error(`\`--port ${raw}\` is out of range; give a whole number from 1 to 65535`);
+  }
+  return port;
+}
+
+/** Whether the crate at `crate` opted into the reload loop.
+ *
+ *  A `--mobile` scaffold has no crate at all, so the read used to throw and take
+ *  the whole dev server down; "no manifest" is simply "no hot reload".
+ */
+export function hotSupported(crate: string): boolean {
+  const manifest = join(crate, "Cargo.toml");
+  return existsSync(manifest) && readFileSync(manifest, "utf8").includes("hot-reload");
 }

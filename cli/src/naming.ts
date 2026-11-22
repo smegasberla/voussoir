@@ -41,9 +41,50 @@ export function libName(crate: string): string {
   return keywords.has(snake) ? `${snake}_app` : snake;
 }
 
+/** Java keywords, which cannot be a package segment. */
+const JAVA_KEYWORDS = new Set([
+  "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+  "class", "const", "continue", "default", "do", "double", "else", "enum",
+  "extends", "final", "finally", "float", "for", "goto", "if", "implements",
+  "import", "instanceof", "int", "interface", "long", "native", "new",
+  "package", "private", "protected", "public", "return", "short", "static",
+  "strictfp", "super", "switch", "synchronized", "this", "throw", "throws",
+  "transient", "try", "void", "volatile", "while", "true", "false", "null",
+]);
+
+/** Refuse a package that Gradle, javac and the JNI mangling cannot all accept.
+ *
+ *  A package reaches the Gradle `namespace`, the generated Java directory and the
+ *  JNI symbol names, so a bad one used to be discovered as an
+ *  `UnsatisfiedLinkError` at launch instead of as an `init` error. Lowercase is
+ *  required because Android tooling rejects mixed case in a namespace, and `_`
+ *  is allowed because the default is derived from the crate name.
+ */
+export function validatePackage(pkg: string): void {
+  const segments = pkg.split(".");
+  if (segments.length < 2) {
+    throw new Error(
+      `\`${pkg}\` is not a package name; use at least two dot-separated segments, like com.example.notes`,
+    );
+  }
+  for (const segment of segments) {
+    if (!/^[a-z][a-z0-9_]*$/.test(segment)) {
+      throw new Error(
+        `\`${pkg}\` is not a valid package: each segment must start with a lowercase letter and contain only lowercase letters, digits and underscores (offending segment: \`${segment}\`)`,
+      );
+    }
+    if (JAVA_KEYWORDS.has(segment)) {
+      throw new Error(`\`${pkg}\` is not a valid package: \`${segment}\` is a Java keyword`);
+    }
+  }
+}
+
 /** A reverse-DNS package. `com.voussoir.<slug>` by default, overridable by the user. */
 export function packageName(crate: string, override?: string): string {
-  if (override) return override;
+  if (override) {
+    validatePackage(override);
+    return override;
+  }
   return `com.voussoir.${libName(crate)}`;
 }
 

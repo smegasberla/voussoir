@@ -201,6 +201,11 @@ export async function runOnDevice(args: Args): Promise<number> {
   ], { silent: true });
 
   console.log("  launched. logs:\n");
+  if (!streamsLogs(args)) {
+    // Without `--wait` the command is a launcher: it returns once the app is up,
+    // which is what a script wants. `--wait` is the opt-in log session.
+    return 0;
+  }
   const logs = Bun.spawn([adb, "logcat", "-s", "Voussoir:*", "RustStdoutStderr:*"], {
     stdout: "inherit",
     stderr: "inherit",
@@ -210,7 +215,12 @@ export async function runOnDevice(args: Args): Promise<number> {
     process.exit(0);
   });
   await logs.exited;
-  return boolFlag(args, "wait") ? 0 : 0;
+  return 0;
+}
+
+/** Whether `android run` keeps the device log stream open after launch. */
+export function streamsLogs(args: Args): boolean {
+  return boolFlag(args, "wait");
 }
 
 /** Locate the built APK without hardcoding the Gradle output layout beyond what

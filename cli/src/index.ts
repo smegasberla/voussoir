@@ -6,6 +6,7 @@
  */
 
 import { parseArgs, type Args } from "./args.ts";
+import { fail } from "./proc.ts";
 import { init } from "./commands/init.ts";
 import { dev } from "./commands/dev.ts";
 import { build } from "./commands/build.ts";
@@ -40,7 +41,8 @@ Options
   --verbose      dev: record reloads, slow commands and refused navigations
   --debug        build: cargo debug profile instead of release
   --size         build: print the binary size
-  --out <path>   build: copy the binary somewhere
+  --out <path>   build: copy the binary somewhere, creating its parent
+  --wait         android run: keep streaming device logs until Ctrl-C
   --icon <path>  package: application icon (256x256 PNG or .icns)
   --identifier   package: reverse-DNS id (default: derived from the app name)
   --package      init: Android package name (default: com.voussoir.<app>)
@@ -69,6 +71,9 @@ if (args.help || args.command === "help") {
 
 let code = 0;
 
+// Expected failures (no cargo, no NDK, a bad flag) throw, and this is the one
+// place that turns them into the clean `voussoir:` line instead of a stack.
+try {
 switch (args.command) {
   case "init":
     code = init(args);
@@ -131,6 +136,9 @@ switch (args.command) {
     console.error(`voussoir: unknown command \`${args.command}\`\n`);
     console.log(HELP);
     code = 1;
+  }
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
 }
 
 process.exit(code);

@@ -58,7 +58,7 @@ Three rules:
 | `build` | bundle the frontend, compile the binary | the above |
 | `package` | build, then wrap it in a platform artifact | the above, plus platform tools |
 | `android build` | cross-compile and package an APK or AAB | NDK, SDK, JDK |
-| `android run` | install and launch on a device | `adb`, a device |
+| `android run` | install and launch on a device; `--wait` keeps its logs attached | `adb`, a device |
 | `ios build` | cross-compile and build the simulator app | Xcode |
 | `ios run` | install and launch on a booted simulator | Xcode, a simulator |
 | `ios verify` | build, install, launch, assert the Rust entry ran | Xcode |
@@ -198,6 +198,9 @@ a failure you want at build time rather than after an upload. `--aab` implies
 release signing.
 
 `android run` installs and launches on the attached device or the running emulator.
+
+Without `--wait` it returns once the app is up, which is what a script wants.
+`--wait` keeps the device log stream attached until Ctrl-C.
 See [Android and iOS](mobile.md).
 
 ## `ios`
