@@ -29,14 +29,13 @@ Measured on the counter example, Linux x86_64, stripped, in the same tree:
 | Build | Bytes | Difference |
 | --- | --- | --- |
 | `opt-level = "s"` (the default) | 2,775,576 | baseline |
-| `opt-level = "z"` | 2,967,000 (approx.) | +7.6% when measured head to head |
 | `full` plus `devtools` | 2,776,296 | +720 bytes |
 
-The `z` figure comes from a direct head-to-head on one tree, where it was 7.6%
-larger than `s`; the absolute size of that older tree was 2,533,088 bytes. The
-current tree is larger because the updater now carries signature verification
-and patches. The devtools delta is tiny either way: dropping it is about not
-shipping an inspector, not about bytes.
+`z` was measured head to head on an earlier tree: 2,533,088 bytes with `s`
+against 2,726,808 with `z`, 7.6% larger. That tree predates signature
+verification and patches, which is why the current absolute figure is higher;
+the relative result is the point. The devtools delta is tiny either way:
+dropping it is about not shipping an inspector, not about bytes.
 
 `z` optimizes for size first and in this dependency tree ends up larger, because
 the webview crates hit slower broad-phase code. Leave the default `s`; measure
