@@ -34,3 +34,6 @@ voussoir-android/example/app/src/main/jniLibs/
 /fuzz/target/
 /fuzz/corpus/
 /fuzz/artifacts/
+
+# Working bug-fix list; local only, never committed.
+/FIXES.md

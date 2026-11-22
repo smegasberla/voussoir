@@ -1,0 +1,19 @@
+{
+  "name": "voussoir-promo",
+  "private": true,
+  "scripts": {
+    "render": "remotion render src/index.ts VoussoirPromo out/voussoir-promo.mp4",
+    "preview": "remotion studio"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.491",
+    "@remotion/google-fonts": "4.0.491",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.491"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.27",
+    "typescript": "5.9.3"
+  }
+}
