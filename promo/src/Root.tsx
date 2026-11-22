@@ -9,6 +9,7 @@ const sequence = [
   [S.Intro, S.LEN.intro],
   [S.WriteRust, S.LEN.writeRust],
   [S.Artifact, S.LEN.artifact],
+  [S.Structure, S.LEN.structure],
   [S.Commands, S.LEN.commands],
   [S.Allowlists, S.LEN.allowlists],
   [S.HotReload, S.LEN.hotReload],
