@@ -591,13 +591,25 @@ fn many_concurrent_async_fns_all_answer() {
     }
     drop(tx);
 
+    // The registry caps concurrent async commands, so under load some of the
+    // sixty-four answers are `busy` rather than doubled values. What must hold
+    // is that every dispatch answers exactly once and no value is duplicated.
     let mut seen = std::collections::HashSet::new();
+    let mut busy = 0;
     for body in rx.iter().take(64) {
         let parsed: Value = serde_json::from_str(&body).unwrap();
-        let value = parsed["ok"].as_u64().unwrap_or_else(|| panic!("{body}"));
-        seen.insert(value / 2);
+        match parsed["ok"].as_u64() {
+            Some(value) => {
+                assert!(seen.insert(value / 2), "duplicate answer: {body}");
+            }
+            None => {
+                assert_eq!(parsed["error"]["kind"], "busy", "{body}");
+                busy += 1;
+            }
+        }
     }
-    assert_eq!(seen.len(), 64, "every request must answer exactly once");
+    assert_eq!(seen.len() + busy, 64, "every request must answer exactly once");
+    assert!(!seen.is_empty(), "the cap must still let work through");
 }
 
 #[test]
