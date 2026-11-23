@@ -93,9 +93,7 @@ pub(crate) fn serve_async(
 ) {
     let dev = dev_origin.is_some();
     let mut builder = base_headers(dev);
-    if let Some(origin) = &dev_origin {
-        builder = with_cors(builder, origin);
-    }
+    builder = grant_fetch(builder, dev_origin.as_deref());
 
     if request.method() == "OPTIONS" {
         responder.respond(
@@ -137,9 +135,7 @@ pub(crate) fn serve_async(
         let cors_origin = dev_origin.clone();
         registry.dispatch_for_window(&handle, label.as_deref(), &method, payload, move |body| {
             let mut response = base_headers(dev);
-            if let Some(origin) = &cors_origin {
-                response = with_cors(response, origin);
-            }
+            response = grant_fetch(response, cors_origin.as_deref());
             responder.respond(
                 response
                     .header(header::CONTENT_TYPE, "application/json")
@@ -183,6 +179,27 @@ fn base_headers(dev: bool) -> wry::http::response::Builder {
         )
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(header::REFERRER_POLICY, "no-referrer")
+}
+
+/// Grant the page permission to read a response it fetched itself.
+///
+/// In dev the page lives on the dev server, so the grant names it. In a bundled
+/// app the page and the response share a scheme, but a custom-scheme origin is
+/// opaque on WKWebView: it has no tuple origin for `'self'` or a same-origin
+/// check to match. Without an explicit grant the page's own
+/// `<script type="module">` is refused there, the page never runs, and every
+/// command call silently never happens, while Chromium and GTK, which do match,
+/// keep working. The handler only serves this app's own bundle to its own
+/// webview and no request is credentialed, so a wildcard grants nothing a
+/// foreign page could use.
+fn grant_fetch(
+    builder: wry::http::response::Builder,
+    dev_origin: Option<&str>,
+) -> wry::http::response::Builder {
+    match dev_origin {
+        Some(origin) => with_cors(builder, origin),
+        None => builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+    }
 }
 
 fn with_cors(builder: wry::http::response::Builder, origin: &str) -> wry::http::response::Builder {
