@@ -205,7 +205,10 @@ try {
   writeFileSync(join(app, "src", "main.ts"), pageSource(`http://127.0.0.1:${reportServer.port}/report`));
 
   const devPort = 16000 + Math.floor(Math.random() * 8000);
-  dev = Bun.spawn([process.execPath, cli, "dev", "--port", String(devPort)], {
+  // `--verbose` is what makes the shell print its diagnostics, and the reload
+  // latency this script asserts is one of them. Without it `dev` sets
+  // VOUSSOIR_VERBOSE=0 explicitly and the line never reaches the log.
+  dev = Bun.spawn([process.execPath, cli, "dev", "--port", String(devPort), "--verbose"], {
     cwd: app,
     env: process.env,
     stdout: "pipe",
@@ -269,7 +272,11 @@ try {
   writeFileSync(commandsFile, howdy);
   const gotHowdy = await waitFor(() => reports.some((r) => r.reply.includes("Howdy, hot!")), 60_000);
   const editToVisible = Date.now() - editAt;
-  const shellLatency = /hot commands gen \d+ active \(rebuild-to-reload (\d+) ms\)/.exec(devLog)?.[1];
+  // The shell reports this through `diagnostics::record`, which prints the
+  // message and then its fields as `key=value`. There is no parenthetical
+  // latency in the message, so the check reads the field the record carries.
+  const hotLine = devLog.split("\n").find((line) => line.includes("hot commands gen"));
+  const shellLatency = hotLine ? /rebuild_to_reload_ms=(\d+)/.exec(hotLine)?.[1] : undefined;
   record(
     "command edit reloads without restart",
     gotHowdy && pageStable(),

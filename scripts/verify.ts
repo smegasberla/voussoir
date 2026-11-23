@@ -324,7 +324,7 @@ async function main() {
         code === 0 && out.includes("SELFTEST OK"),
         code === 0
           ? out.trim().split("\n").pop()!
-          : err.slice(-120) || "(no stderr: killed after the 90 s budget)",
+          : `exit ${code} | stdout: ${out.slice(-160) || "none"} | stderr: ${err.slice(-160) || "none"}`,
       );
     }
   }
