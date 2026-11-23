@@ -214,7 +214,10 @@ export async function verify(args: Args): Promise<number> {
   const proc = Bun.spawn(["xcrun", "simctl", "launch", "--console-pty", udid, bundle], {
     stdout: "pipe",
   });
-  const timer = setTimeout(() => proc.kill(), 45000);
+  // 90 s, not 45: the app is installed into a simulator that has just booted,
+  // and the first launch pays for dyld and the webview's own start-up before the
+  // page runs. A wedged launch still fails, just later.
+  const timer = setTimeout(() => proc.kill(), 90000);
   let text = "";
   const reader = proc.stdout.getReader();
   try {
