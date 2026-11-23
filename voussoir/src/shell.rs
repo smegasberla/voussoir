@@ -322,14 +322,10 @@ pub(crate) fn build_shim_with(dev_origin: Option<&str>, timeout_ms: u64) -> Stri
     // - Android's WebResourceRequest carries no body at all.
     // - iOS's WKURLSchemeHandler never hands the body to Rust, so the request
     //   arrives with an empty payload.
-    // - Windows' WebView2 intercepts the rewritten origin but does not answer an
-    //   embedded-mode POST, and the page waits on a promise that never settles.
-    // All three already register the IPC handler, so this only picks the route.
-    let bridge = cfg!(any(
-        target_os = "android",
-        target_os = "ios",
-        target_os = "windows"
-    ));
+    // Windows is deliberately not here: `voussoir dev` round-trips there over the
+    // protocol, so a protocol POST does reach the engine. Sending it down the
+    // bridge instead would only hide whatever the real fault is.
+    let bridge = cfg!(any(target_os = "android", target_os = "ios"));
     let mut origins = vec![APP_ORIGIN.to_owned()];
     if let Some(dev) = dev_origin {
         origins.push(dev.to_owned());

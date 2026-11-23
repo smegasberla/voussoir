@@ -74,16 +74,30 @@ fn shim_uses_the_bridge_wherever_a_protocol_post_cannot_answer() {
     // shim either posts to the custom protocol or hands the call to wry's IPC
     // handler, and picking wrong is a promise that never settles. This pins the
     // choice next to the reasons, so adding a platform has to decide out loud.
-    let bridged = cfg!(any(
-        target_os = "android",
-        target_os = "ios",
-        target_os = "windows"
-    ));
+    let bridged = cfg!(any(target_os = "android", target_os = "ios"));
     let shim = build_shim(None);
     assert_eq!(
         shim.contains("const bridge = true;"),
         bridged,
         "the shim's transport must match where a protocol POST can deliver a body"
+    );
+}
+
+#[test]
+fn shim_survives_a_document_with_no_root_element() {
+    // The shim is injected at document start, where WKWebView and WebView2 have
+    // neither `document.head` nor `document.documentElement`. Touching one threw
+    // and the whole script died before `window.voussoir` was assigned, so the
+    // page's own call failed with a ReferenceError and no request was ever made.
+    // A viewport hint must never be able to take the API down with it.
+    let shim = build_shim(None);
+    assert!(
+        shim.contains("if (document.documentElement) addViewport();"),
+        "the viewport hint must wait for the root element instead of assuming it"
+    );
+    assert!(
+        shim.contains(r#"document.addEventListener("DOMContentLoaded", addViewport"#),
+        "a start-time shim must defer to DOMContentLoaded"
     );
 }
 

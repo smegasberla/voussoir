@@ -26,12 +26,28 @@
   // viewport on a phone, which reads as a page that slides sideways under the
   // reader's finger. Add the meta only when the page did not declare one, so an
   // app that pins its own scale is never overridden.
-  if (!document.querySelector('meta[name="viewport"]')) {
-    const meta = document.createElement("meta");
-    meta.name = "viewport";
-    meta.content = "width=device-width, initial-scale=1";
-    (document.head || document.documentElement).appendChild(meta);
-  }
+  //
+  // This runs at document start, where WKWebView and WebView2 have neither
+  // `document.head` nor `document.documentElement` yet. Touching one threw, the
+  // rest of this script never ran, and `window.voussoir` was therefore missing:
+  // the page's own call failed with a ReferenceError that its catch turned into
+  // a text line, so the window looked fine and no request was ever made. Wait
+  // for the element instead, and never let the decoration take the API down.
+  const addViewport = () => {
+    try {
+      if (document.querySelector('meta[name="viewport"]')) return;
+      const root = document.head || document.documentElement;
+      if (!root) return;
+      const meta = document.createElement("meta");
+      meta.name = "viewport";
+      meta.content = "width=device-width, initial-scale=1";
+      root.appendChild(meta);
+    } catch {
+      // A viewport hint is worth less than a working bridge.
+    }
+  };
+  if (document.documentElement) addViewport();
+  else document.addEventListener("DOMContentLoaded", addViewport, { once: true });
 
   function originAllowed() {
     if (allowed.length === 0) return true;
