@@ -213,6 +213,9 @@ export async function verify(args: Args): Promise<number> {
   // failure looked the same regardless of its cause.
   const proc = Bun.spawn(["xcrun", "simctl", "launch", "--console-pty", udid, bundle], {
     stdout: "pipe",
+    // The shell prints its diagnostics with `eprintln!`. Capturing only stdout
+    // dropped every one of them, so a failure printed nothing about its cause.
+    stderr: "pipe",
     env: {
       ...process.env,
       SIMCTL_CHILD_RUST_BACKTRACE: "1",
@@ -224,21 +227,35 @@ export async function verify(args: Args): Promise<number> {
   // page runs. A wedged launch still fails, just later.
   const timer = setTimeout(() => proc.kill(), 90000);
   let text = "";
-  const reader = proc.stdout.getReader();
-  try {
+  const collect = async (stream: ReadableStream<Uint8Array> | undefined) => {
+    if (!stream) return;
+    const reader = stream.getReader();
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) return;
       text += new TextDecoder().decode(value);
-      // Stop waiting as soon as the round trip lands; a healthy launch needs
-      // seconds, and the timeout only exists for a wedged one.
-      if (text.includes("VOUSSOIR_IOS_ROUND_TRIP")) {
-        proc.kill();
-        break;
-      }
     }
+  };
+  // Stop waiting as soon as the round trip lands; a healthy launch needs
+  // seconds, and the timeout only exists for a wedged one. Both streams are read
+  // concurrently because the shell writes its diagnostics to stderr and the
+  // markers to stdout, and reading them in sequence can miss whichever arrives
+  // while the other is being awaited.
+  try {
+    const landed = (async () => {
+      for (;;) {
+        if (text.includes("VOUSSOIR_IOS_ROUND_TRIP")) return;
+        await Bun.sleep(100);
+      }
+    })();
+    await Promise.race([
+      landed,
+      Promise.all([collect(proc.stdout), collect(proc.stderr)]),
+      proc.exited.then(() => {}),
+    ]);
   } finally {
     clearTimeout(timer);
+    proc.kill();
   }
 
   const problems: string[] = [];
