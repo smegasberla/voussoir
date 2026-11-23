@@ -493,9 +493,18 @@ final class VoussoirDeviceSupport {
     /** Click the first node labelled {@code label}, waiting for it to appear. */
     static void click(String label) {
         waitFor(label, () -> find(label) != null);
-        AccessibilityNodeInfo node = find(label);
-        if (node != null && click(node)) {
-            return;
+        // Finding the node is not the same as being able to click it. A row the
+        // provider inserted a moment ago can be laid out but not yet actionable,
+        // and the picker's own list rebuilds while it loads, so one attempt
+        // fails intermittently on a busy emulator. Retry until the normal
+        // timeout instead of failing on the first refusal.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
+        while (System.nanoTime() < deadline) {
+            AccessibilityNodeInfo node = find(label);
+            if (node != null && click(node)) {
+                return;
+            }
+            sleep(200);
         }
         fail("could not click " + label);
     }
