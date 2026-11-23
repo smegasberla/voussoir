@@ -316,7 +316,10 @@ async function main() {
       const { out, err, code } = await shWithTimeout(
         [join(repo, "target", "release", "examples", `hello${EXE}`)],
         repo,
-        { VOUSSOIR_SELFTEST: "1" },
+        // Verbose on: the shell records a refused navigation, a bridge error and
+        // a failed command only through diagnostics, and without this the run
+        // that hangs says nothing about why.
+        { VOUSSOIR_SELFTEST: "1", VOUSSOIR_VERBOSE: "1" },
         90_000,
       );
       record(
@@ -324,7 +327,7 @@ async function main() {
         code === 0 && out.includes("SELFTEST OK"),
         code === 0
           ? out.trim().split("\n").pop()!
-          : `exit ${code} | stdout: ${out.slice(-160) || "none"} | stderr: ${err.slice(-160) || "none"}`,
+          : `exit ${code} | stdout: ${out.slice(-300) || "none"} | stderr: ${err.slice(-400) || "none"}`,
       );
     }
   }

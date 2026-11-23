@@ -108,6 +108,16 @@ pub(crate) fn serve_async(
     }
 
     let path = request.uri().path().to_owned();
+    // Every request the webview makes, and every reply it gets. A page that
+    // never runs its script is otherwise invisible: the window looks healthy and
+    // only the command that never arrives is missing, which is a different fault
+    // from a page that ran and had its call refused. Recorded only when
+    // diagnostics are on, so a release build pays nothing.
+    crate::diagnostics::record(
+        crate::diagnostics::Kind::Dispatch,
+        "request",
+        serde_json::json!({ "method": request.method().as_str(), "path": &path }),
+    );
 
     if let Some(method) = ipc::method_from_path(&path) {
         if request.method() != "POST" {

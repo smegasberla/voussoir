@@ -101,11 +101,17 @@ fn csp(dev: bool) -> &'static str {
          base-uri 'none'; \
          form-action 'none'"
     } else {
+        // The scheme is named next to 'self' on purpose. A custom-scheme origin
+        // is opaque in some engines, and 'self' there does not reliably match a
+        // <script type="module"> the page loads from its own origin: WKWebView
+        // and WebView2 refused /main.js, so the page never ran and every command
+        // call vanished while the window looked healthy. Naming `voussoir:` is
+        // what dev mode already did, which is why dev worked and this did not.
         "default-src 'self'; \
-         script-src 'self'; \
-         style-src 'self' 'unsafe-inline'; \
-         img-src 'self' data: blob:; \
-         font-src 'self' data:; \
+         script-src 'self' voussoir:; \
+         style-src 'self' voussoir: 'unsafe-inline'; \
+         img-src 'self' voussoir: data: blob:; \
+         font-src 'self' voussoir: data:; \
          connect-src 'self' voussoir:; \
          object-src 'none'; \
          base-uri 'none'; \

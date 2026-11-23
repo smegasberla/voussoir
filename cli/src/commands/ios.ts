@@ -211,6 +211,12 @@ export async function verify(args: Args): Promise<number> {
     ["xcrun", "simctl", "spawn", udid, "launchctl", "setenv", "RUST_BACKTRACE", "1"],
     { silent: true },
   ).catch(() => {});
+  // Diagnostics on, for the same reason the desktop self-test asks for them: a
+  // failed round trip is only explainable from what the shell recorded.
+  await run(
+    ["xcrun", "simctl", "spawn", udid, "launchctl", "setenv", "VOUSSOIR_VERBOSE", "1"],
+    { silent: true },
+  ).catch(() => {});
   const proc = Bun.spawn(["xcrun", "simctl", "launch", "--console-pty", udid, bundle], {
     stdout: "pipe",
   });
