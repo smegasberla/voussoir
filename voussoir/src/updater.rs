@@ -346,6 +346,7 @@ mod fetch_tests {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 /// One platform's artifact inside a manifest.
 #[derive(Debug, Clone)]
 struct Release {
@@ -362,6 +363,7 @@ struct Release {
     notes: Value,
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Debug, Clone)]
 struct Patch {
     from: String,
@@ -730,7 +732,9 @@ mod manifest_tests {
 // Applying an update (desktop only)
 // ---------------------------------------------------------------------------
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::path::{Path, PathBuf};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::{Arc, Mutex};
 
 /// How long one artifact download may take, from connect to the last byte.

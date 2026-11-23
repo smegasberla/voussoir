@@ -18,6 +18,10 @@ commands = { path = "commands", package = "{{CRATE}}-commands" }
 # Enabled only by `voussoir dev`. Release builds never enable it, which is what
 # keeps libloading (the hot-reload loader) out of every shipped binary.
 hot-reload = ["voussoir/hot-reload"]
+# `voussoir dev` asks for this together with `hot-reload`: the inspector is a
+# development tool, and keeping it a feature is what keeps it out of a
+# release build that never opts in.
+devtools = ["voussoir/devtools"]
 
 [workspace]
 members = ["commands"]

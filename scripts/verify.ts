@@ -309,18 +309,22 @@ async function main() {
           .join(" | ") || "(cargo failed with no stderr captured)";
       record("embedded round-trip + emit", false, detail);
     } else {
+      // 90 s, not 30: the first launch of a cold Windows runner creates the
+      // WebView2 profile and has it scanned before the page runs, which on its
+      // own can outlast a tight budget. A real hang still fails, just slower,
+      // and the timeout message now says how long it waited.
       const { out, err, code } = await shWithTimeout(
         [join(repo, "target", "release", "examples", `hello${EXE}`)],
         repo,
         { VOUSSOIR_SELFTEST: "1" },
-        30_000,
+        90_000,
       );
       record(
         "embedded round-trip + emit",
         code === 0 && out.includes("SELFTEST OK"),
         code === 0
           ? out.trim().split("\n").pop()!
-          : err.slice(-120) || "(no stderr: killed by the timeout)",
+          : err.slice(-120) || "(no stderr: killed after the 90 s budget)",
       );
     }
   }

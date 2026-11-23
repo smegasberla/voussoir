@@ -224,10 +224,12 @@ pub use android::{
     complete_dialog, fail_dialog, http_get, init_activity, install_menu, pick_dialog, show_menu,
 };
 
-/// iOS has no menu bar. The desktop menu code still calls this before falling
-/// back to the page-drawn menu, so answer the same way Android does when there
-/// is nothing to install: false.
+/// iOS has no menu bar. `menu::build` on iOS still calls this before falling
+/// back to the page-drawn menu, so it has to exist whenever the `menu` feature
+/// is on. Keep that in one place: the dead-code allowance covers the check
+/// build that compiles this crate without `menu`, where nothing calls it.
 #[cfg(target_os = "ios")]
+#[allow(dead_code)]
 pub fn install_menu(_groups: &str) -> bool {
     false
 }

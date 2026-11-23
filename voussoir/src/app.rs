@@ -8,9 +8,12 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tao::{
-    event::Event, event_loop::EventLoopBuilder, keyboard::ModifiersState, window::WindowBuilder,
-};
+use tao::{event::Event, event_loop::EventLoopBuilder, keyboard::ModifiersState};
+// iOS builds its first window through `open_window` below, so the builder and
+// the webview constructor are not on this path there. Importing them anyway is
+// an unused-import error under `-D warnings`.
+#[cfg(not(target_os = "ios"))]
+use tao::window::WindowBuilder;
 
 use crate::hooks::{CloseHook, Fired, ReadyHook};
 #[cfg(feature = "hot-reload")]
@@ -19,8 +22,10 @@ use crate::hot;
 use crate::menu;
 #[cfg(feature = "tray")]
 use crate::tray;
+#[cfg(not(target_os = "ios"))]
+use crate::build_webview;
 use crate::{
-    build_factory, build_webview, diagnostics, event_loop, live, platform, print_latency_summary,
+    build_factory, diagnostics, event_loop, live, platform, print_latency_summary,
     register_builtins, reporting, windows, AppHandle, AssetTable, Config, Error, Registry,
     UserEvent, WindowOptions,
 };
