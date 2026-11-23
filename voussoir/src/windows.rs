@@ -277,10 +277,14 @@ pub(crate) fn create_window(
         .map_err(|e| Error::Runtime(e.to_string()))?;
 
     let target = spec.url_for(&spec.entry_for(options));
+
+    #[cfg(target_os = "ios")]
+    println!("VOUSSOIR_IOS_TARGET {target}");
+
     let webview = crate::build_webview(build(target, Some(spec.label_for(options))), &window)?;
 
     #[cfg(target_os = "ios")]
-    println!("VOUSSOIR_IOS_CREATED {target}");
+    println!("VOUSSOIR_IOS_CREATED");
 
     Ok((
         window.id(),
