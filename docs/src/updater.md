@@ -53,7 +53,7 @@ string in the config's `version` as in your own `Cargo.toml`:
 ```
 
 Without a `version` the command falls back to `env!("CARGO_PKG_VERSION")` evaluated
-inside the `voussoir` crate, which is the framework's version (0.2.0) and almost
+inside the `voussoir` crate, which is the framework's version (0.1.0) and almost
 never what your feed tracks. Older docs told you to work around that by writing your
 own comparison; that is no longer necessary.
 

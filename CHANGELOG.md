@@ -5,7 +5,12 @@ All notable changes to the `voussoir` crate and the `voussoir` CLI. Format follo
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with the 0.x rule
 described under [Compatibility](../README.md#compatibility) in the README.
 
-## [Unreleased]
+## [0.1.0] - 2026-11-21
+
+First release. Nothing before this was published, so this section absorbs the
+unreleased history of the crate instead of starting from an empty list. The 0.x
+rule applies from here: the shim is protocol 3, and a breaking change to the
+page API or to `Error` bumps the minor version rather than the patch.
 
 ### Changed
 
@@ -15,7 +20,7 @@ described under [Compatibility](../README.md#compatibility) in the README.
   protocol is `voussoir://localhost`, and the environment variables are
   `VOUSSOIR_*`. The reason is availability rather than taste: `kiln` on crates.io
   has been taken and yanked since 2019, so the crate could not be published under
-  it. There is no compatibility shim, since 0.2.0 is the first release meant for
+  it. There is no compatibility shim, since 0.1.0 is the first release meant for
   use outside this repository and an app that wants to keep the old names can
   alias them itself.
 
@@ -29,13 +34,21 @@ described under [Compatibility](../README.md#compatibility) in the README.
   rasterised at and cannot fringe. The CLI's generated fallback icon draws the
   same figure.
 
-## [0.2.0] - 2026-11-21
-
-First release intended for use outside this repository. The 0.x rule applies:
-the shim is protocol 3, and `Error` gained variants, so this is a minor bump
-rather than a patch.
-
-### Added
+- `App` builder with compile-time embedded config (`voussoir.json`) and assets, and a
+  cloneable `AppHandle` for `emit`, `emit_to`, `eval`, and `open_window`.
+- One JSON IPC endpoint (`POST voussoir://localhost/__voussoir/<method>`), with sync
+  handlers on the UI thread and `async_command` handlers on worker threads.
+- Panic containment for every handler: a panicking command returns
+  `{"error":"command panicked: ..."}` and the window survives.
+- Navigation allowlist and Content-Security-Policy served with every response,
+  plus the origin-scoped `window.voussoir` shim.
+- Optional features: `menu`, `tray`, `dialog`, `updater`, `devtools`, `full`.
+- Crash reporting to an in-memory ring buffer, an optional log file, and the
+  `__voussoir_reports` command.
+- `voussoir-android` crate, driven by an activity that owns the event loop and uses
+  wry's IPC handler instead of the custom protocol.
+- CLI: `init`, `dev`, `build`, `package`, `android build`, `android run`,
+  `doctor`, compiled with `bun build --compile` so end users need no JS runtime.
 
 - Worker-thread commands are bounded. `add_async` spawns one thread per call, and
   a page looping on one slow allowlisted command could reserve stacks until the
@@ -318,24 +331,3 @@ rather than a patch.
   `dispatch.rs` use `expect` with the invariant written down, and `rt.rs`'s runtime
   construction documents why a lazy panic is the right report there. Six
   documented `expect` calls remain outside tests, none on a reachable failure path.
-## [0.1.0]
-
-First published version.
-
-### Added
-
-- `App` builder with compile-time embedded config (`voussoir.json`) and assets, and a
-  cloneable `AppHandle` for `emit`, `emit_to`, `eval`, and `open_window`.
-- One JSON IPC endpoint (`POST voussoir://localhost/__voussoir/<method>`), with sync
-  handlers on the UI thread and `async_command` handlers on worker threads.
-- Panic containment for every handler: a panicking command returns
-  `{"error":"command panicked: ..."}` and the window survives.
-- Navigation allowlist and Content-Security-Policy served with every response,
-  plus the origin-scoped `window.voussoir` shim.
-- Optional features: `menu`, `tray`, `dialog`, `updater`, `devtools`, `full`.
-- Crash reporting to an in-memory ring buffer, an optional log file, and the
-  `__voussoir_reports` command.
-- `voussoir-android` crate, driven by an activity that owns the event loop and uses
-  wry's IPC handler instead of the custom protocol.
-- CLI: `init`, `dev`, `build`, `package`, `android build`, `android run`,
-  `doctor`, compiled with `bun build --compile` so end users need no JS runtime.

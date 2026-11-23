@@ -30,9 +30,9 @@ voussoir-android/example/app/src/main/jniLibs/
 # Generated site output, if the website is checked out into place.
 /website/dist/
 
-# The Mullion app is its own public repository (smegasberla/mullion).
+# The Relay app is its own public repository (smegasberla/relay).
 # Ignored for the same reason as /website/: independent history and releases.
-/mullion/
+/relay/
 
 # libFuzzer build output and crash corpus
 /fuzz/target/

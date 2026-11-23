@@ -245,7 +245,7 @@ The app's own version, compared against the feed by `update.check` and
 ```
 
 Keep it equal to the `version` in your own `Cargo.toml`. Absent, the updater falls
-back to the framework's crate version (0.2.0), which is rarely the version your
+back to the framework's crate version (0.1.0), which is rarely the version your
 releases use.
 
 ### `update.public_key`

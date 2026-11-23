@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.1.0",
   "notes": "The endpoint the updater example points at, kept in-tree so a device can reach a real one.",
   "url": "https://github.com/smegasberla/voussoir"
 }

@@ -59,7 +59,7 @@ is three direct dependencies**, and everything optional is a cargo feature a
 minimal app does not pay for.
 
 ```
-voussoir 0.2.0
+voussoir 0.1.0
 ├── serde_json
 ├── tao
 └── wry

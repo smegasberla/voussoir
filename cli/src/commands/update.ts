@@ -12,7 +12,7 @@ import { chmodSync, existsSync, renameSync, rmSync, writeFileSync } from "node:f
 import { dirname, join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
 
-export const CLI_VERSION = "0.2.0";
+export const CLI_VERSION = "0.1.0";
 
 const FEED_CAP = 64 * 1024;
 const ARTIFACT_CAP = 256 * 1024 * 1024;
