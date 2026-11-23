@@ -6,7 +6,6 @@ description = "Minimal Rust runtime shell: OS webview + tao window + generic JSO
 license = "MIT"
 authors = ["smegasberla <smegasberla@gmail.com>"]
 repository = "https://github.com/smegasberla/voussoir"
-homepage = "https://github.com/smegasberla/voussoir"
 documentation = "https://github.com/smegasberla/voussoir/tree/master/docs/src"
 readme = "../README.md"
 keywords = ["gui", "desktop", "webview", "ipc", "tauri-alternative"]
