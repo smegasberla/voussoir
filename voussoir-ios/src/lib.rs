@@ -57,7 +57,16 @@ pub fn runtime() -> Option<(&'static Arc<Registry>, &'static AppHandle)> {
 /// the shell cannot be duplicated by the crate that starts it without the
 /// webview and the native side disagreeing about which commands exist.
 pub fn run(app: App) {
-    app.run().ok();
+    if let Err(error) = app.run() {
+        // Silently dropping this made two very different failures identical: a
+        // run that never got a window and a page that loaded and stayed quiet
+        // both ended with the entry marker and then nothing. NSLog rather than
+        // stdout because the simulator console is the only channel iOS leaves.
+        log(&format!("voussoir: run failed: {error}"));
+        // NSLog goes to the system log, which `simctl launch --console-pty` does
+        // not show. stdout does, and that is the channel the verify reads.
+        println!("VOUSSOIR_IOS_RUN failed: {error}");
+    }
 }
 
 /// Write a line to the system log via `NSLog`.

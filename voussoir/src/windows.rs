@@ -267,6 +267,9 @@ pub(crate) fn create_window(
 ) -> Result<(WindowId, WindowEntry), Error> {
     use tao::window::WindowBuilder;
 
+    #[cfg(target_os = "ios")]
+    println!("VOUSSOIR_IOS_CREATE {}", spec.entry_for(options));
+
     let window = WindowBuilder::new()
         .with_title(spec.title_for(options))
         .with_inner_size(size_for(options, spec.default_size))
@@ -275,6 +278,9 @@ pub(crate) fn create_window(
 
     let target = spec.url_for(&spec.entry_for(options));
     let webview = crate::build_webview(build(target, Some(spec.label_for(options))), &window)?;
+
+    #[cfg(target_os = "ios")]
+    println!("VOUSSOIR_IOS_CREATED {target}");
 
     Ok((
         window.id(),
