@@ -415,8 +415,11 @@ impl App {
             allowlist: None,
         };
         // The first window is built here rather than through `open_window`, so
-        // its label is registered by hand; `insert` is idempotent, so the iOS
-        // path (which does go through `open_window`) is unaffected.
+        // its label is registered by hand. Not on iOS: there the window *is*
+        // created through `open_window`, and that call reserves the label
+        // itself and refuses one that is already open. Registering it first made
+        // the app reject its own first window, so no page ever loaded.
+        #[cfg(not(target_os = "ios"))]
         handle.window_registry().insert(&spec.label_for(&first));
         #[cfg(not(target_os = "ios"))]
         let window = WindowBuilder::new()
