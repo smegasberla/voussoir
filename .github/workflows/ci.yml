@@ -78,9 +78,11 @@ jobs:
       - name: Typecheck and test CLI
         working-directory: cli
         run: |
-          bun install --frozen-lockfile
-          bun run typecheck
+          ../scripts/typecheck-cli.sh
           bun test
+
+      - name: No dependency tree in the framework
+        run: test ! -d cli/node_modules && test ! -d promo/node_modules
 
       # The book is documentation that has to stay buildable: an orphan chapter or
       # and a link to a chapter the summary omits fails here

@@ -8,11 +8,7 @@
   },
   "scripts": {
     "build": "bun build --compile --minify src/index.ts --outfile dist/voussoir",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "../scripts/typecheck-cli.sh",
     "test": "bun test"
-  },
-  "devDependencies": {
-    "@types/bun": "^1.4.4",
-    "typescript": "^7.0.2"
   }
 }

@@ -359,6 +359,11 @@ The gates CI runs are `cargo test`, `bun test` in `cli/`, and
 A bug report with a reproduction is worth more than a feature request; this
 project says no to features on purpose.
 
+The framework checkout stays free of `node_modules`: the CLI needs no packages
+to run or test, and `scripts/typecheck-cli.sh` installs TypeScript and Bun's
+declarations in a temporary directory, pointing `tsc` at them. CI fails if a
+dependency tree appears in `cli/` or `promo/`.
+
 ## License
 
 [MIT](LICENSE). Do what you want with it: use it, modify it, sell it, ship it
