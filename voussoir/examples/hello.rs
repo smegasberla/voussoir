@@ -46,6 +46,16 @@ fn main() -> Result<(), Error> {
             Ok(json!(null))
         })
         .on_ready(move |app, _window| {
+            if selftest {
+                // Printed before the round trip is attempted. A run that dies
+                // without this line never opened its window; a run that prints
+                // it and still fails got as far as a working webview and lost
+                // the page's call instead. Those need different fixes, and a
+                // silent SIGTERM used to be indistinguishable between them.
+                println!("SELFTEST READY");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
             if bench {
                 println!("READY {}", started.elapsed().as_millis());
                 use std::io::Write;
