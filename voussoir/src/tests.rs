@@ -69,6 +69,25 @@ fn shim_names_the_origin_the_page_is_actually_served_from() {
 }
 
 #[test]
+fn shim_uses_the_bridge_wherever_a_protocol_post_cannot_answer() {
+    // The reply route is a property of the platform, not a build detail: the
+    // shim either posts to the custom protocol or hands the call to wry's IPC
+    // handler, and picking wrong is a promise that never settles. This pins the
+    // choice next to the reasons, so adding a platform has to decide out loud.
+    let bridged = cfg!(any(
+        target_os = "android",
+        target_os = "ios",
+        target_os = "windows"
+    ));
+    let shim = build_shim(None);
+    assert_eq!(
+        shim.contains("const bridge = true;"),
+        bridged,
+        "the shim's transport must match where a protocol POST can deliver a body"
+    );
+}
+
+#[test]
 fn the_shim_announces_its_protocol_version() {
     let shim = build_shim(None);
     assert!(

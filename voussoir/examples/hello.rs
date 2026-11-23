@@ -30,7 +30,15 @@ fn main() -> Result<(), Error> {
         .assets(ASSETS)
         // Typed: `{}` or `{"name":"..."}` only. Anything else is rejected with a
         // `payload` error naming the command, before this body runs.
-        .command_typed("greet", |_app, args: GreetArgs| {
+        .command_typed("greet", move |_app, args: GreetArgs| {
+            if selftest {
+                // Proves the page's call reached Rust. Without this, a run that
+                // printed READY and died is indistinguishable from a page that
+                // never loaded its script, and those need different fixes.
+                println!("SELFTEST INVOKED");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
             let name = args.name.as_deref().unwrap_or("world");
             Ok(json!(format!("Hello, {name}! (from Rust)")))
         })

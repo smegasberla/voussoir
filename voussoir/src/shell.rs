@@ -139,8 +139,9 @@ pub(crate) fn build_factory(
                 },
             )
             .with_ipc_handler({
-                // Only Android sends bridge messages; on desktop this handler is
-                // present but the shim never uses it.
+                // Used wherever the shim was built with the bridge: Android, iOS
+                // and Windows. The handler is registered everywhere so the shim's
+                // choice is the only branch, not a platform `cfg` in two places.
                 let registry = Arc::clone(&registry);
                 let handle = handle.clone();
                 move |request: Request<String>| {
@@ -316,9 +317,19 @@ pub(crate) fn build_webview(
 /// The allowlist is computed in Rust and injected as JSON, so the page side never
 /// guesses which origins are legitimate.
 pub(crate) fn build_shim_with(dev_origin: Option<&str>, timeout_ms: u64) -> String {
-    // Android's WebResourceRequest carries no body, so a protocol POST cannot
-    // deliver a payload there; wry's IPC handler is the only option.
-    let bridge = cfg!(target_os = "android");
+    // Where a custom-protocol POST cannot answer, the reply has to travel over
+    // wry's IPC handler instead:
+    // - Android's WebResourceRequest carries no body at all.
+    // - iOS's WKURLSchemeHandler never hands the body to Rust, so the request
+    //   arrives with an empty payload.
+    // - Windows' WebView2 intercepts the rewritten origin but does not answer an
+    //   embedded-mode POST, and the page waits on a promise that never settles.
+    // All three already register the IPC handler, so this only picks the route.
+    let bridge = cfg!(any(
+        target_os = "android",
+        target_os = "ios",
+        target_os = "windows"
+    ));
     let mut origins = vec![APP_ORIGIN.to_owned()];
     if let Some(dev) = dev_origin {
         origins.push(dev.to_owned());
