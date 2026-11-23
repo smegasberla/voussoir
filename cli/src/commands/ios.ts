@@ -207,18 +207,17 @@ export async function verify(args: Args): Promise<number> {
   await run(["xcrun", "simctl", "install", udid, app], { silent: true });
   await run(["xcrun", "simctl", "terminate", udid, bundle], { silent: true }).catch(() => {});
 
-  await run(
-    ["xcrun", "simctl", "spawn", udid, "launchctl", "setenv", "RUST_BACKTRACE", "1"],
-    { silent: true },
-  ).catch(() => {});
-  // Diagnostics on, for the same reason the desktop self-test asks for them: a
-  // failed round trip is only explainable from what the shell recorded.
-  await run(
-    ["xcrun", "simctl", "spawn", udid, "launchctl", "setenv", "VOUSSOIR_VERBOSE", "1"],
-    { silent: true },
-  ).catch(() => {});
+  // `launchctl setenv` does not reach an app that `simctl` launches: it starts
+  // the process with its own environment. `SIMCTL_CHILD_*` is the supported way
+  // to pass one in, and without it the run recorded nothing at all, so every
+  // failure looked the same regardless of its cause.
   const proc = Bun.spawn(["xcrun", "simctl", "launch", "--console-pty", udid, bundle], {
     stdout: "pipe",
+    env: {
+      ...process.env,
+      SIMCTL_CHILD_RUST_BACKTRACE: "1",
+      SIMCTL_CHILD_VOUSSOIR_VERBOSE: "1",
+    },
   });
   // 90 s, not 45: the app is installed into a simulator that has just booted,
   // and the first launch pays for dyld and the webview's own start-up before the
