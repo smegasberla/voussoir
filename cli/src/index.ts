@@ -33,7 +33,7 @@ Commands
   keygen         create the Ed25519 key that signs releases
   sign           print the sha256 and signature for a release artifact
   patch          build the delta between two release artifacts
-  update         replace this CLI from a release feed (--check to only ask)
+  update         rebuild this CLI from its checkout (--check to only ask)
   android run    install and launch on a device or emulator
   ios build      cross-compile and build the simulator app (or --target device)
   ios run        install and launch on a booted iOS simulator
@@ -55,8 +55,8 @@ Options
   --from <ver>   patch: the version the patch upgrades from
   --feed <url>   update: read a prebuilt-binary feed instead of rebuilding
                    from the install.sh checkout (or VOUSSOIR_CLI_FEED)
-  --check        update: report the newest version without downloading
-  --force        update: install even if the feed is not newer
+  --check        update: report what is newer without changing anything
+  --force        update: rebuild or install even when already current
   --icon <path>  package: application icon (256x256 PNG or .icns)
   --identifier   package: reverse-DNS id (default: derived from the app name)
   --package      init: Android package name (default: com.voussoir.<app>)
