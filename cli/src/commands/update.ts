@@ -316,13 +316,38 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   const built = join(build, "dist", "voussoir");
   if (!existsSync(built)) throw new Error(`the build finished but ${built} is missing`);
 
-  try {
-    installBytes(readFileSync(built), process.execPath);
-  } catch (error) {
-    throw new Error(`cannot replace ${process.execPath}: ${(error as Error).message}`);
+  // Only a compiled binary can be replaced. Run as `bun cli/src/index.ts`,
+  // `process.execPath` is the Bun runtime itself, and installing over it would
+  // destroy the toolchain the rebuild just used.
+  const target = installTarget();
+  if (target === undefined) {
+    console.log(`  rebuilt ${remote.slice(0, 7)}; ${built} is ready but nothing is installed to replace`);
+    console.log("  run install.sh to install the CLI");
+    return 0;
   }
-  console.log(`  rebuilt ${remote.slice(0, 7)} and replaced ${process.execPath}`);
+  try {
+    installBytes(readFileSync(built), target);
+  } catch (error) {
+    throw new Error(`cannot replace ${target}: ${(error as Error).message}`);
+  }
+  console.log(`  rebuilt ${remote.slice(0, 7)} and replaced ${target}`);
   return 0;
+}
+
+/**
+ * The installed CLI to replace, or `undefined` when running from source.
+ *
+ * A compiled binary's `execPath` is itself; a script's is the runtime running
+ * it. Writing the new binary over the runtime would replace Bun with the CLI.
+ */
+export function installTarget(execPath: string = process.execPath): string | undefined {
+  // Both separators: `path.basename` is platform-specific, and a Windows path
+  // handed to it on Unix comes back whole, which would defeat the check.
+  const base = (execPath.split(/[\\/]/).pop() ?? "").toLowerCase();
+  if (base === "bun" || base === "bun.exe" || base === "node" || base === "node.exe") {
+    return undefined;
+  }
+  return execPath;
 }
 
 async function updateFromFeed(

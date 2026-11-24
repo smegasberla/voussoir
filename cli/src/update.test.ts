@@ -17,6 +17,7 @@ import {
   ensureTrustedUrl,
   githubFeed,
   installBytes,
+  installTarget,
   platformKey,
   readChecksum,
   sourceDir,
@@ -281,5 +282,19 @@ describe("Update without a checkout", () => {
       if (previous === undefined) delete process.env.VOUSSOIR_SRC;
       else process.env.VOUSSOIR_SRC = previous;
     }
+  });
+});
+
+describe("Update install target", () => {
+  test("refuses to replace the runtime running a script", () => {
+    // `bun cli/src/index.ts` reports bun itself as execPath. Installing there
+    // would swap the toolchain for the CLI, which is unrecoverable.
+    expect(installTarget("/home/me/.bun/bin/bun")).toBeUndefined();
+    expect(installTarget("C:\\Users\\me\\.bun\\bun.exe")).toBeUndefined();
+    expect(installTarget("/usr/bin/node")).toBeUndefined();
+  });
+
+  test("replaces an installed voussoir binary", () => {
+    expect(installTarget("/home/me/.local/bin/voussoir")).toBe("/home/me/.local/bin/voussoir");
   });
 });
