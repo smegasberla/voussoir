@@ -55,6 +55,7 @@ Options
   --from <ver>   patch: the version the patch upgrades from
   --feed <url>   update: read a prebuilt-binary feed instead of rebuilding
                    from the install.sh checkout (or VOUSSOIR_CLI_FEED)
+  --out <path>   update: write the binary here instead of replacing the CLI
   --check        update: report what is newer without changing anything
   --force        update: rebuild or install even when already current
   --icon <path>  package: application icon (256x256 PNG or .icns)

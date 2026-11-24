@@ -67,7 +67,7 @@ Three rules:
 | `keygen` | create the Ed25519 key that signs releases | nothing |
 | `sign` | print the `sha256` and `signature` for an artifact | the signing key |
 | `patch` | build the delta between two artifacts | the signing key, optionally |
-| `update` | rebuild and replace the CLI from its `install.sh` checkout | `--feed` (or `VOUSSOIR_CLI_FEED`) for a prebuilt-binary feed |
+| `update` | rebuild and replace the CLI from its `install.sh` checkout | `--feed` (or `VOUSSOIR_CLI_FEED`) for a prebuilt-binary feed; `--out` to write the binary elsewhere |
 
 ## `init`
 
