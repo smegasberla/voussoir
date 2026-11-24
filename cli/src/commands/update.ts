@@ -403,7 +403,15 @@ async function updateFromFeed(
     return 0;
   }
 
-  const target = stringFlag(args, "out") ?? process.execPath;
+  // `--out` names where to write, so it is honoured as given. The fallback to
+  // the running executable goes through the same guard as a rebuild: run from a
+  // script that is Bun itself, and installing there would replace the runtime.
+  const target = stringFlag(args, "out") ?? installTarget();
+  if (target === undefined) {
+    throw new Error(
+      `download ready, but nothing is installed to replace; pass --out <path> or run install.sh`,
+    );
+  }
   console.log(`  downloading ${feed.version} for ${key}...`);
   let bytes: Buffer;
   try {
