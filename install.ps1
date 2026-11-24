@@ -138,7 +138,7 @@ Copy-Item $built (Join-Path $binDir "voussoir.exe") -Force
 $share = Join-Path $env:LOCALAPPDATA "voussoir"
 New-Item -ItemType Directory -Force -Path $share | Out-Null
 Set-Content -Path (Join-Path $share "source") -Value $src -NoNewline
-Log "recorded the source checkout in $share\source"
+Write-Host "voussoir-install: recorded the source checkout in $share\source"
 Write-Host "voussoir-install: installed $(Join-Path $binDir 'voussoir.exe')"
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
