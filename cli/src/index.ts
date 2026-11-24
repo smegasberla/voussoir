@@ -9,7 +9,7 @@ import { parseArgs, type Args } from "./args.ts";
 import { fail } from "./proc.ts";
 import { keygen, sign as signArtifact } from "./commands/keys.ts";
 import { patch } from "./commands/patch.ts";
-import { update } from "./commands/update.ts";
+import { CLI_VERSION, update } from "./commands/update.ts";
 import { init } from "./commands/init.ts";
 import { dev } from "./commands/dev.ts";
 import { build } from "./commands/build.ts";
@@ -68,6 +68,7 @@ Options
   --json         doctor: machine-readable output
   --check        docs: validate SUMMARY.md and the links, build nothing
   -h, --help     show this help
+  -V, --version  print the CLI version
 
 Docs
   Frontend: src/ is bundled by Bun (TypeScript, JSX, CSS, HTML entries).
@@ -77,6 +78,15 @@ Docs
 
 const argv = Bun.argv.slice(2);
 const args = parseArgs(argv);
+
+// Read before parsing: `--version` starts with a dash, so the parser would turn
+// it into the help command. A release build is checked with this before it is
+// published, which is what makes a mis-built binary fail the release instead of
+// reaching whoever updates into it.
+if (argv.includes("--version") || argv.includes("-V")) {
+  console.log(CLI_VERSION);
+  process.exit(0);
+}
 
 if (args.help || args.command === "help") {
   console.log(HELP);
