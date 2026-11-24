@@ -64,8 +64,9 @@ pub fn run(app: App) {
         // stdout because the simulator console is the only channel iOS leaves.
         log(&format!("voussoir: run failed: {error}"));
         // NSLog goes to the system log, which `simctl launch --console-pty` does
-        // not show. stdout does, and that is the channel the verify reads.
-        println!("VOUSSOIR_IOS_RUN failed: {error}");
+        // not show; stderr does, and a run that fails before the loop starts is
+        // otherwise indistinguishable from a page that loaded and stayed quiet.
+        eprintln!("voussoir: run failed: {error}");
     }
 }
 

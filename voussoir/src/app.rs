@@ -441,18 +441,9 @@ impl App {
         // first window through the event a `window.open` command uses and
         // gets it once the loop is running.
         #[cfg(target_os = "ios")]
-        {
-            // stdout, not the log: it is the only channel the simulator console
-            // carries back to `voussoir ios verify`, and a run that never opened
-            // a window used to look exactly like a page that stayed silent.
-            match handle.open_window(first) {
-                Ok(label) => println!("VOUSSOIR_IOS_WINDOW requested {label}"),
-                Err(error) => {
-                    println!("VOUSSOIR_IOS_WINDOW failed: {error}");
-                    return Err(error);
-                }
-            }
-        }
+        handle
+            .open_window(first)
+            .map_err(|e| Error::Runtime(e.to_string()))?;
 
         // Both natives stay alive for the whole run: the menu is the bar itself,
         // and dropping the tray handle removes the icon from the status area. They
