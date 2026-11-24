@@ -53,8 +53,8 @@ Options
   --key <path>   sign: the Ed25519 private key (default voussoir-signing-key.pem)
   --out <path>   keygen: where to write the private key
   --from <ver>   patch: the version the patch upgrades from
-  --feed <url>   update: the release feed (default: GitHub releases of
-                   smegasberla/voussoir; or VOUSSOIR_CLI_FEED)
+  --feed <url>   update: read a prebuilt-binary feed instead of rebuilding
+                   from the install.sh checkout (or VOUSSOIR_CLI_FEED)
   --check        update: report the newest version without downloading
   --force        update: install even if the feed is not newer
   --icon <path>  package: application icon (256x256 PNG or .icns)

@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +19,7 @@ import {
   installBytes,
   platformKey,
   readChecksum,
+  sourceDir,
   update,
 } from "./commands/update.ts";
 import { parseArgs } from "./args.ts";
@@ -237,6 +246,40 @@ describe("Checksum files", () => {
       expect(digest).toBe("b".repeat(64));
     } finally {
       server.stop(true);
+    }
+  });
+});
+
+describe("Update source resolution", () => {
+  test("finds this checkout, so `update` has something to rebuild", () => {
+    // Running the tests from a checkout is the case a developer hits, and the
+    // old fixed guess at ~/.local/share/voussoir/src missed it entirely.
+    const dir = sourceDir();
+    expect(readdirSync(dir)).toContain("cli");
+    expect(existsSync(join(dir, "cli", "package.json"))).toBe(true);
+  });
+
+  test("VOUSSOIR_SRC wins when it is set", () => {
+    const previous = process.env.VOUSSOIR_SRC;
+    process.env.VOUSSOIR_SRC = "/tmp/not-a-real-checkout";
+    try {
+      expect(sourceDir()).toBe("/tmp/not-a-real-checkout");
+    } finally {
+      if (previous === undefined) delete process.env.VOUSSOIR_SRC;
+      else process.env.VOUSSOIR_SRC = previous;
+    }
+  });
+});
+
+describe("Update without a checkout", () => {
+  test("says what is missing instead of guessing", async () => {
+    const previous = process.env.VOUSSOIR_SRC;
+    process.env.VOUSSOIR_SRC = join(tmpdir(), `voussoir-missing-${process.pid}`, "src");
+    try {
+      await expect(update(parseArgs(["update", "--check"]))).rejects.toThrow(/no source checkout/);
+    } finally {
+      if (previous === undefined) delete process.env.VOUSSOIR_SRC;
+      else process.env.VOUSSOIR_SRC = previous;
     }
   });
 });

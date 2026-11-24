@@ -296,6 +296,14 @@ cp dist/voussoir "$PREFIX/bin/voussoir"
 chmod 755 "$PREFIX/bin/voussoir"
 log "installed $PREFIX/bin/voussoir"
 
+# Record the checkout this binary was built from. `voussoir update` rebuilds
+# that source rather than downloading a release, so the installed copy has to be
+# told where it lives; guessing would walk away from a checkout right here.
+SHARE=${XDG_DATA_HOME:-$HOME/.local/share}/voussoir
+mkdir -p "$SHARE"
+printf '%s\n' "$SRC" > "$SHARE/source"
+log "recorded the source checkout in $SHARE/source"
+
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *) log "add it to PATH:  export PATH=\"$PREFIX/bin:\$PATH\"" ;;

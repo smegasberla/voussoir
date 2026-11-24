@@ -132,6 +132,13 @@ if (-not (Test-Path $built)) { Fail "build finished but dist\voussoir(.exe) is m
 $binDir = Join-Path $Prefix "bin"
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 Copy-Item $built (Join-Path $binDir "voussoir.exe") -Force
+
+# `voussoir update` rebuilds the source rather than downloading a release, so
+# record which checkout this binary came from.
+$share = Join-Path $env:LOCALAPPDATA "voussoir"
+New-Item -ItemType Directory -Force -Path $share | Out-Null
+Set-Content -Path (Join-Path $share "source") -Value $src -NoNewline
+Log "recorded the source checkout in $share\source"
 Write-Host "voussoir-install: installed $(Join-Path $binDir 'voussoir.exe')"
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

@@ -67,7 +67,7 @@ Three rules:
 | `keygen` | create the Ed25519 key that signs releases | nothing |
 | `sign` | print the `sha256` and `signature` for an artifact | the signing key |
 | `patch` | build the delta between two artifacts | the signing key, optionally |
-| `update` | replace the CLI from a release feed (default: GitHub releases of `smegasberla/voussoir`) | `--feed` (or `VOUSSOIR_CLI_FEED`) |
+| `update` | rebuild and replace the CLI from its `install.sh` checkout | `--feed` (or `VOUSSOIR_CLI_FEED`) for a prebuilt-binary feed |
 
 ## `init`
 
@@ -302,9 +302,12 @@ These are decisions, not gaps waiting to be filled:
 - **No `publish` command.** Uploading to a store or a registry needs credentials,
   and a build tool should not hold yours.
 - **No implicit self-update.** `voussoir update` exists, but it only runs when you
-  ask and only against the feed you name; there is no background check, no default
-  release server, and no signature authority for the CLI. It verifies the download's
-  `sha256` and renames it into place, and `--check` reports without installing.
+  ask; there is no background check. The default is to fast-forward the checkout
+  `install.sh` built the CLI from and rebuild it, because this project ships from
+  source rather than from published releases. `--feed` is still there for anyone
+  serving prebuilt binaries of their own, and that path verifies the download's
+  `sha256` before renaming it into place. `--check` reports without changing
+  anything on either path.
 - **No global state.** Every command reads and writes the project directory and the
   standard toolchain locations, nothing else. Two projects never interfere, and a
   CI cache is the only thing that survives a clean checkout.

@@ -6,20 +6,19 @@
  *  There is no signing key for the CLI by default, so this is hash + TLS; run it
  *  by hand, and it says so when the feed is not https.
  *
- *  The feed defaults to the repository's `releases/latest`, so a plain
- *  `voussoir update` works with no flags and no environment.
+ *  A plain `voussoir update` rebuilds from the checkout `install.sh` made, which
+ *  is how this project is distributed: there are no published releases to read.
+ *  `--feed <url>` is still accepted for anyone shipping prebuilt binaries.
  */
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
 
 export const CLI_VERSION = "0.1.0";
 
-/** The published release feed, so a plain `voussoir update` works with no flags. */
-export const DEFAULT_REPO = "smegasberla/voussoir";
-export const DEFAULT_FEED_URL = `https://api.github.com/repos/${DEFAULT_REPO}/releases/latest`;
 
 const FEED_CAP = 64 * 1024;
 const ARTIFACT_CAP = 256 * 1024 * 1024;
@@ -215,24 +214,127 @@ export async function readChecksum(
   return undefined;
 }
 
+/** A directory that looks like this project's checkout. */
+function isCheckout(dir: string): boolean {
+  return existsSync(join(dir, "cli", "package.json")) && existsSync(join(dir, "Cargo.toml"));
+}
+
+/**
+ * Where `install.sh` keeps the checkout it builds the CLI from.
+ *
+ * Three answers, in order of how directly they say it: the environment, the
+ * pointer `install.sh` now writes beside the installed binary, and walking up
+ * from this source file, which is what running `bun cli/src/index.ts` uses. The
+ * old single guess at `~/.local/share/voussoir/src` only held when the installer
+ * had cloned, so a developer's own checkout was invisible to it.
+ */
+export function sourceDir(): string {
+  if (process.env.VOUSSOIR_SRC) return process.env.VOUSSOIR_SRC;
+  const share = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+
+  const pointer = join(share, "voussoir", "source");
+  if (existsSync(pointer)) {
+    const recorded = readFileSync(pointer, "utf8").trim();
+    if (recorded && isCheckout(recorded)) return recorded;
+  }
+
+  let dir = import.meta.dir;
+  for (;;) {
+    if (isCheckout(dir)) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return join(share, "voussoir", "src");
+}
+
 export async function update(args: Args): Promise<number> {
-  const feedUrl =
-    stringFlag(args, "feed") ?? process.env.VOUSSOIR_CLI_FEED ?? DEFAULT_FEED_URL;
   const checkOnly = boolFlag(args, "check");
   const force = boolFlag(args, "force");
 
+  // Nothing is published as a release, so the honest default is the same source
+  // tree `install.sh` builds from: fetch, rebuild, replace. `--feed` stays for
+  // anyone serving prebuilt binaries of their own.
+  const feedUrl = stringFlag(args, "feed") ?? process.env.VOUSSOIR_CLI_FEED;
+  if (feedUrl) return await updateFromFeed(feedUrl, args, checkOnly, force);
+  return await updateFromSource(checkOnly, force);
+}
+
+/**
+ * Rebuild the CLI from its checkout, the way `install.sh` installed it.
+ *
+ * A release feed would be the wrong shape for this project: there is no release
+ * to read, and the CLI is built from source on every install, so "the newest
+ * version" is whatever the checkout's remote has. Rebuilding and replacing the
+ * running binary keeps both halves honest.
+ */
+async function updateFromSource(checkOnly: boolean, force: boolean): Promise<number> {
+  const dir = sourceDir();
+  if (!existsSync(join(dir, ".git"))) {
+    throw new Error(
+      `no source checkout at ${dir}; run install.sh, or pass --feed <url> for a prebuilt binary`,
+    );
+  }
+
+  const git = (argv: string[], allowFailure = false): string => {
+    const out = Bun.spawnSync(["git", "-C", dir, ...argv], { stdout: "pipe", stderr: "pipe" });
+    if (out.exitCode !== 0 && !allowFailure) {
+      throw new Error(`git ${argv.join(" ")} failed: ${out.stderr.toString().trim()}`);
+    }
+    return out.stdout.toString().trim();
+  };
+
+  const before = git(["rev-parse", "HEAD"]);
+  git(["fetch", "--quiet", "origin"]);
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  const remote = git(["rev-parse", `origin/${branch}`]);
+  const behind = before !== remote;
+
+  if (!behind && !force) {
+    console.log(`  ${CLI_VERSION} is current (checkout at ${before.slice(0, 7)})`);
+    return 0;
+  }
+  if (checkOnly) {
+    console.log(`  update available: ${before.slice(0, 7)} -> ${remote.slice(0, 7)} in ${dir}`);
+    return 0;
+  }
+
+  // Fast-forward only: a checkout with local commits is someone's work in
+  // progress, and replacing their binary over it would be the wrong move.
+  git(["merge", "--ff-only", `origin/${branch}`]);
+
+  console.log("  rebuilding...");
+  const build = join(dir, "cli");
+  for (const argv of [["bun", "install"], ["bun", "run", "build"]]) {
+    const out = Bun.spawnSync(argv, { cwd: build, stdout: "pipe", stderr: "pipe" });
+    if (out.exitCode !== 0) {
+      throw new Error(`${argv.join(" ")} failed: ${out.stderr.toString().trim()}`);
+    }
+  }
+
+  const built = join(build, "dist", "voussoir");
+  if (!existsSync(built)) throw new Error(`the build finished but ${built} is missing`);
+
+  try {
+    installBytes(readFileSync(built), process.execPath);
+  } catch (error) {
+    throw new Error(`cannot replace ${process.execPath}: ${(error as Error).message}`);
+  }
+  console.log(`  rebuilt ${remote.slice(0, 7)} and replaced ${process.execPath}`);
+  return 0;
+}
+
+async function updateFromFeed(
+  feedUrl: string,
+  args: Args,
+  checkOnly: boolean,
+  force: boolean,
+): Promise<number> {
   let feedBody = "";
   try {
     feedBody = await fetchText(feedUrl, FEED_CAP, 30_000);
   } catch (error) {
-    // The default feed is the repository's `releases/latest`, which answers 404
-    // until the first release is published. That is not a broken update: there
-    // is simply nothing to move to yet, and a plain `voussoir update` should say
-    // so rather than fail.
-    if (feedUrl === DEFAULT_FEED_URL && /answered 404/.test((error as Error).message)) {
-      console.log(`  no release published yet for ${DEFAULT_REPO} (${CLI_VERSION} is current)`);
-      return 0;
-    }
     throw new Error(`cannot read the update feed: ${(error as Error).message}`);
   }
   let raw: Record<string, unknown>;
