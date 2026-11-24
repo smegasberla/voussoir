@@ -67,7 +67,7 @@ Three rules:
 | `keygen` | create the Ed25519 key that signs releases | nothing |
 | `sign` | print the `sha256` and `signature` for an artifact | the signing key |
 | `patch` | build the delta between two artifacts | the signing key, optionally |
-| `update` | replace the CLI from a release feed | `--feed` (or `VOUSSOIR_CLI_FEED`) |
+| `update` | replace the CLI from a release feed (default: GitHub releases of `smegasberla/voussoir`) | `--feed` (or `VOUSSOIR_CLI_FEED`) |
 
 ## `init`
 

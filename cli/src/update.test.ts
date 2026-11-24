@@ -7,8 +7,10 @@ import {
   CLI_VERSION,
   compareVersions,
   ensureTrustedUrl,
+  githubFeed,
   installBytes,
   platformKey,
+  readChecksum,
   update,
 } from "./commands/update.ts";
 import { parseArgs } from "./args.ts";
@@ -163,6 +165,77 @@ describe("voussoir update", () => {
       expect(readFileSync(target, "utf8")).toBe("old");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+      server.stop(true);
+    }
+  });
+});
+
+describe("GitHub release feeds", () => {
+  const release = (assets: Array<{ name: string; browser_download_url: string }>) => ({
+    tag_name: "v0.2.0",
+    assets,
+  });
+
+  test("picks the asset for this platform and strips the v", () => {
+    const feed = githubFeed(
+      release([
+        { name: "voussoir-cli-macos-arm64", browser_download_url: "https://example.com/mac" },
+        { name: "voussoir-cli-linux-x86_64", browser_download_url: "https://example.com/linux" },
+      ]),
+      "linux-x86_64",
+    );
+    expect(feed.version).toBe("0.2.0");
+    expect(feed.url).toBe("https://example.com/linux");
+  });
+
+  test("does not let one platform's key match another's", () => {
+    const feed = githubFeed(
+      release([
+        { name: "voussoir-cli-linux-arm64", browser_download_url: "https://example.com/arm" },
+        { name: "voussoir-cli-linux-x86_64", browser_download_url: "https://example.com/x86" },
+      ]),
+      "linux-x86_64",
+    );
+    expect(feed.url).toBe("https://example.com/x86");
+  });
+
+  test("carries a published checksum, and none when the release has none", () => {
+    const withSums = githubFeed(
+      release([
+        { name: "voussoir-cli-linux-x86_64", browser_download_url: "https://example.com/x86" },
+        { name: "sha256sums.txt", browser_download_url: "https://example.com/sums" },
+      ]),
+      "linux-x86_64",
+    );
+    expect(withSums.sha256).toBe("sha256sums.txt\u0000https://example.com/sums");
+
+    const without = githubFeed(
+      release([{ name: "voussoir-cli-linux-x86_64", browser_download_url: "https://example.com/x86" }]),
+      "linux-x86_64",
+    );
+    expect(without.sha256).toBeUndefined();
+  });
+
+  test("refuses a release with no asset for the platform", () => {
+    expect(() => githubFeed(release([]), "linux-x86_64")).toThrow(/no download for linux-x86_64/);
+  });
+});
+
+describe("Checksum files", () => {
+  test("reads the line naming the artifact out of a combined sums file", async () => {
+    const body = [
+      `${"a".repeat(64)}  voussoir-cli-macos-arm64`,
+      `${"b".repeat(64)}  voussoir-cli-linux-x86_64`,
+    ].join("\n");
+    const server = Bun.serve({ port: 0, fetch: () => new Response(body) });
+    try {
+      const digest = await readChecksum(
+        "sha256sums.txt",
+        `http://127.0.0.1:${server.port}/sums`,
+        "https://example.com/downloads/voussoir-cli-linux-x86_64",
+      );
+      expect(digest).toBe("b".repeat(64));
+    } finally {
       server.stop(true);
     }
   });

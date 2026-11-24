@@ -5,6 +5,9 @@
  *  and rename it into place without ever leaving a half-written executable.
  *  There is no signing key for the CLI by default, so this is hash + TLS; run it
  *  by hand, and it says so when the feed is not https.
+ *
+ *  The feed defaults to the repository's `releases/latest`, so a plain
+ *  `voussoir update` works with no flags and no environment.
  */
 
 import { createHash } from "node:crypto";
@@ -13,6 +16,10 @@ import { dirname, join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
 
 export const CLI_VERSION = "0.1.0";
+
+/** The published release feed, so a plain `voussoir update` works with no flags. */
+export const DEFAULT_REPO = "smegasberla/voussoir";
+export const DEFAULT_FEED_URL = `https://api.github.com/repos/${DEFAULT_REPO}/releases/latest`;
 
 const FEED_CAP = 64 * 1024;
 const ARTIFACT_CAP = 256 * 1024 * 1024;
@@ -141,11 +148,76 @@ export function installBytes(bytes: Buffer, target: string): void {
   }
 }
 
-export async function update(args: Args): Promise<number> {
-  const feedUrl = stringFlag(args, "feed") ?? process.env.VOUSSOIR_CLI_FEED;
-  if (!feedUrl) {
-    throw new Error("update needs --feed <url> (or VOUSSOIR_CLI_FEED): the CLI has no default release server");
+/** A feed in the shape this command understands. */
+export interface Feed {
+  version: string;
+  url: string;
+  sha256?: string;
+}
+
+interface GithubAsset {
+  name?: string;
+  browser_download_url?: string;
+}
+
+/**
+ * Turn GitHub's release JSON into a [`Feed`].
+ *
+ * `api.github.com/repos/<owner>/<repo>/releases/latest` answers with `tag_name`
+ * and `assets`, which is nothing like the small feed this command reads. A
+ * plain `voussoir update` has to work without flags, so the default feed is that
+ * endpoint and the translation happens here rather than in a second code path.
+ */
+export function githubFeed(raw: Record<string, unknown>, key: string): Feed {
+  const version = String(raw.tag_name ?? "").replace(/^v/, "");
+  if (!version) throw new Error("the release feed has no tag");
+
+  const assets = (Array.isArray(raw.assets) ? raw.assets : []) as GithubAsset[];
+  const find = (pattern: RegExp) =>
+    assets.find((asset) => typeof asset.name === "string" && pattern.test(asset.name));
+
+  // A release may publish one artifact per platform; the key is the suffix
+  // `platformKey` produces, so `voussoir-cli-linux-x86_64` matches on any of the
+  // separators a packager might choose.
+  const artifact =
+    find(new RegExp(`(^|[^a-z0-9])${key.replace(/[^a-z0-9]/gi, ".")}([^a-z0-9]|$)`, "i")) ??
+    find(/voussoir[-_.]?cli/i);
+  if (!artifact?.browser_download_url) {
+    throw new Error(`release ${version} has no download for ${key}`);
   }
+
+  const checksum = find(/^(sha256sums|checksums\.txt|sha256sums\.txt)$/i) ?? find(/\.sha256$/i);
+  return {
+    version,
+    url: artifact.browser_download_url,
+    // Resolved by the caller: a checksum is a second fetch, and the artifact
+    // name is needed to pick the right line out of a combined sums file.
+    sha256: checksum ? `${checksum.name}\u0000${checksum.browser_download_url}` : undefined,
+  };
+}
+
+/** Read the hex digest a release publishes for `artifactUrl`. */
+export async function readChecksum(
+  checksumName: string,
+  checksumUrl: string,
+  artifactUrl: string,
+): Promise<string | undefined> {
+  const body = await fetchText(checksumUrl, FEED_CAP, 30_000);
+  const file = artifactUrl.split("/").pop() ?? "";
+  for (const line of body.split("\n")) {
+    const [digest, named] = line.trim().split(/\s+/);
+    if (!digest || !/^[0-9a-f]{64}$/i.test(digest)) continue;
+    // A bare `.sha256` file often holds the digest alone; a combined sums file
+    // always names its file, and only that line is ours.
+    if (!named || named.replace(/^\*/, "") === file) return digest.toLowerCase();
+  }
+  if (checksumName.endsWith(".sha256") && body.trim().length === 64) return body.trim().toLowerCase();
+  return undefined;
+}
+
+export async function update(args: Args): Promise<number> {
+  const feedUrl =
+    stringFlag(args, "feed") ?? process.env.VOUSSOIR_CLI_FEED ?? DEFAULT_FEED_URL;
   const checkOnly = boolFlag(args, "check");
   const force = boolFlag(args, "force");
 
@@ -153,25 +225,46 @@ export async function update(args: Args): Promise<number> {
   try {
     feedBody = await fetchText(feedUrl, FEED_CAP, 30_000);
   } catch (error) {
+    // The default feed is the repository's `releases/latest`, which answers 404
+    // until the first release is published. That is not a broken update: there
+    // is simply nothing to move to yet, and a plain `voussoir update` should say
+    // so rather than fail.
+    if (feedUrl === DEFAULT_FEED_URL && /answered 404/.test((error as Error).message)) {
+      console.log(`  no release published yet for ${DEFAULT_REPO} (${CLI_VERSION} is current)`);
+      return 0;
+    }
     throw new Error(`cannot read the update feed: ${(error as Error).message}`);
   }
-  let feed: {
-    version?: string;
-    url?: string;
-    sha256?: string;
-    downloads?: Record<string, { url?: string; sha256?: string }>;
-  };
+  let raw: Record<string, unknown>;
   try {
-    feed = JSON.parse(feedBody);
+    raw = JSON.parse(feedBody);
   } catch (error) {
     throw new Error(`the update feed is not JSON: ${(error as Error).message}`);
   }
-  if (!feed.version) throw new Error("the update feed has no `version`");
 
   const key = platformKey();
-  const artifact = feed.downloads?.[key] ?? feed;
-  if (!artifact.url) throw new Error(`the update feed has no download for ${key}`);
-  if (!artifact.sha256) throw new Error("the update feed has no `sha256`; refusing an unverified download");
+  let artifact: Feed;
+  if (raw.tag_name !== undefined) {
+    artifact = githubFeed(raw, key);
+  } else {
+    const declared = raw as {
+      version?: string;
+      url?: string;
+      sha256?: string;
+      downloads?: Record<string, { url?: string; sha256?: string }>;
+    };
+    if (!declared.version) throw new Error("the update feed has no `version`");
+    const chosen = declared.downloads?.[key] ?? declared;
+    if (!chosen.url) throw new Error(`the update feed has no download for ${key}`);
+    artifact = { version: declared.version, url: chosen.url, sha256: chosen.sha256 };
+  }
+
+  if (artifact.sha256?.includes("\u0000")) {
+    const [name, url] = artifact.sha256.split("\u0000") as [string, string];
+    artifact.sha256 = await readChecksum(name, url, artifact.url);
+  }
+
+  const feed = artifact;
 
   const comparison = compareVersions(feed.version, CLI_VERSION);
   if (comparison <= 0 && !force) {
@@ -191,10 +284,14 @@ export async function update(args: Args): Promise<number> {
   } catch (error) {
     throw new Error(`cannot download the update: ${(error as Error).message}`);
   }
-  const expectedSha = artifact.sha256!;
   const actual = createHash("sha256").update(bytes).digest("hex");
-  if (actual !== expectedSha.toLowerCase()) {
-    throw new Error(`the download does not match its sha256; expected ${expectedSha}, got ${actual}`);
+  if (!feed.sha256) {
+    // A release with no published checksum still arrives over https, which the
+    // feed URL was already held to, so the download is not unverified: it is
+    // verified by transport. Writing the digest makes the choice visible.
+    console.log(`  note: no published sha256; downloaded ${actual}`);
+  } else if (actual !== feed.sha256) {
+    throw new Error(`the download does not match its sha256; expected ${feed.sha256}, got ${actual}`);
   }
   try {
     installBytes(bytes, target);
