@@ -2715,6 +2715,7 @@ dependencies = [
  "gtk",
  "jni",
  "libloading 0.8.9",
+ "miniz_oxide 0.8.9",
  "muda",
  "ndk-context",
  "rfd",

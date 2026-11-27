@@ -16,6 +16,9 @@ exclude = ["examples/studio/icon.png"]
 # Signature verification for updates. Pure Rust, so it builds on every target;
 # only the transport (`ureq`) is desktop-only.
 sha2 = { version = "0.10", optional = true }
+# Deflate for update patches. Already in the tree via tao/wry, so this asks for a
+# direct dependency on a crate the build was pulling in anyway.
+miniz_oxide = { version = "0.8", optional = true }
 base64 = { version = "0.22", optional = true }
 ed25519-dalek = { version = "2", optional = true, default-features = false, features = ["fast", "std", "zeroize"] }
 # `linux-body` is not optional here: WebKitGTK only delivers POST bodies to a
@@ -61,7 +64,7 @@ tray = ["dep:tray-icon", "menu"]
 # Native open/save file dialogs exposed as commands.
 dialogs = ["dep:rfd"]
 # Update checks, plus download/verify/install on desktop.
-updater = ["dep:ureq", "dep:sha2", "dep:base64", "dep:ed25519-dalek"]
+updater = ["dep:ureq", "dep:sha2", "dep:base64", "dep:ed25519-dalek", "dep:miniz_oxide"]
 # Devtools in release builds (F12). Costs a little binary size.
 devtools = ["wry/devtools"]
 # Swap a hot-reloaded commands cdylib into the running shell (`voussoir dev`).

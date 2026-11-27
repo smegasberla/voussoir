@@ -18,10 +18,20 @@
 //!
 //! There is no end marker: the patch ends with the file. The generator lives in
 //! the CLI (`cli/src/delta.ts`), which is where a release is assembled.
+//!
+//! A patch whose operations deflate to fewer bytes is written as `"VSC1"`
+//! followed by raw deflate (no gzip or zlib container, since the payload is the
+//! whole file). A patch with little to compress stays `VSD1`, and both are
+//! accepted here: a feed signed before compression existed keeps working, and a
+//! reader that predates it keeps working against an uncompressed patch. The
+//! inflation is bounded by the same output cap as the operations, so a crafted
+//! stream cannot expand without limit.
 
 use crate::Error;
 
 const MAGIC: &[u8; 4] = b"VSD1";
+/// The same operations, deflated. The generator writes it when that is smaller.
+const COMPRESSED_MAGIC: &[u8; 4] = b"VSC1";
 const COPY: u8 = 1;
 const INSERT: u8 = 2;
 
@@ -35,6 +45,27 @@ pub fn apply(old: &[u8], patch: &[u8]) -> Result<Vec<u8>, Error> {
 
 /// [`apply`] with the output cap as a parameter, for tests.
 pub fn apply_capped(old: &[u8], patch: &[u8], cap: usize) -> Result<Vec<u8>, Error> {
+    // A patch is mostly inserted machine code, so the generator deflates the
+    // operations when that is smaller and marks the file `VSC1`. A reader that
+    // predates this only knows `VSD1`, which still applies unchanged, so both
+    // shapes have to be understood here.
+    let inflated;
+    let patch = if patch.starts_with(COMPRESSED_MAGIC) {
+        inflated = miniz_oxide::inflate::decompress_to_vec_with_limit(
+            &patch[COMPRESSED_MAGIC.len()..],
+            cap.saturating_add(MAGIC.len()),
+        )
+        .map_err(|error| {
+            Error::Handler(format!(
+                "update patch could not be decompressed: {:?}",
+                error.status
+            ))
+        })?;
+        &inflated[..]
+    } else {
+        patch
+    };
+
     if !patch.starts_with(MAGIC) {
         return Err(Error::Handler(
             "update patch is not a Voussoir patch (missing VSD1 header)".to_owned(),

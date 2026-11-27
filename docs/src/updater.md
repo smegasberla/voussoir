@@ -247,7 +247,11 @@ written before this shape keeps working.
 
 `voussoir release` writes this per platform and signs every hop. `voussoir patch`
 builds one delta by hand when you are assembling a feed yourself. The format is
-copy-runs-and-inserts, documented in `voussoir/src/delta.rs`.
+copy-runs-and-inserts, documented in `voussoir/src/delta.rs`. Inserted machine code
+repeats, so a patch is deflated (raw, no container) when that is smaller, marked
+`VSC1` instead of `VSD1`. A tiny patch stays uncompressed, both forms are read, and
+inflation is bounded by the same output cap. On a real 962 KB release pair a build
+with genuine code changes went from 45% of the artifact to 23%.
 
 **Progress.** While `update.apply` downloads it emits
 `voussoir.listen("update-progress", ({received, total}) => ...)`, at most every

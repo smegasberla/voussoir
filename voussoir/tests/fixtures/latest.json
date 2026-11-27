@@ -38,84 +38,84 @@
       {
         "from": "0.9.0",
         "url": "http://127.0.0.1:8080/any-0.9.0-to-1.1.0.vsd",
-        "sha256": "0e8edc3bc1cc04f707bc3a15235674da6b396645cfabd108c7e243900f8caf1e",
-        "signature": "yB1glBXgOxapL7F8b77vAowlNGOBvZLukTkqwm5UZIysM9Q3zKqsNPAdbsvS+9GTD02G9dhZENSqO7TLqasNBQ=="
+        "sha256": "12d7550d0d9703c1d5489838fdf1c2ef8dab72e13b4c8b76751385aa73fbc8f0",
+        "signature": "0pOm54MniGrWaTV5NytBz6xXSQLi+q4K4Q4ps/N/fefk8XqsHXJIEs2pz1osLAB+nmTXeGYffgJbI+WrqG/tAA=="
       },
       {
         "from": "1.0.0",
         "url": "http://127.0.0.1:8080/any-1.0.0-to-1.1.0.vsd",
-        "sha256": "327175cc319b4061198c0dbce1a11c361effe3f48309167d7da2ab8e4ebc59db",
-        "signature": "UFdLDdBu+gtJ4lhfqnma7i66k0LCISZjn7xb37I7ou9XIzyBij58TCcPGqIxTZQtXGdEEHspVkwNa+bir9XRBQ=="
+        "sha256": "3be93b049fd27aa0955721add922981aca55eda721b771f80340e2c3434b014b",
+        "signature": "eLxL3IEzNEnLuxEDJy8mReaIoZJRWdq2XZZUD2rFWq94DgHlNgHha96tQCo3jVwAEYEX2kgjyRZTBCFnjQngDA=="
       }
     ],
     "linux-aarch64": [
       {
         "from": "0.9.0",
         "url": "http://127.0.0.1:8080/any-0.9.0-to-1.1.0.vsd",
-        "sha256": "0e8edc3bc1cc04f707bc3a15235674da6b396645cfabd108c7e243900f8caf1e",
-        "signature": "yB1glBXgOxapL7F8b77vAowlNGOBvZLukTkqwm5UZIysM9Q3zKqsNPAdbsvS+9GTD02G9dhZENSqO7TLqasNBQ=="
+        "sha256": "12d7550d0d9703c1d5489838fdf1c2ef8dab72e13b4c8b76751385aa73fbc8f0",
+        "signature": "0pOm54MniGrWaTV5NytBz6xXSQLi+q4K4Q4ps/N/fefk8XqsHXJIEs2pz1osLAB+nmTXeGYffgJbI+WrqG/tAA=="
       },
       {
         "from": "1.0.0",
         "url": "http://127.0.0.1:8080/any-1.0.0-to-1.1.0.vsd",
-        "sha256": "327175cc319b4061198c0dbce1a11c361effe3f48309167d7da2ab8e4ebc59db",
-        "signature": "UFdLDdBu+gtJ4lhfqnma7i66k0LCISZjn7xb37I7ou9XIzyBij58TCcPGqIxTZQtXGdEEHspVkwNa+bir9XRBQ=="
+        "sha256": "3be93b049fd27aa0955721add922981aca55eda721b771f80340e2c3434b014b",
+        "signature": "eLxL3IEzNEnLuxEDJy8mReaIoZJRWdq2XZZUD2rFWq94DgHlNgHha96tQCo3jVwAEYEX2kgjyRZTBCFnjQngDA=="
       }
     ],
     "macos-x86_64": [
       {
         "from": "0.9.0",
         "url": "http://127.0.0.1:8080/any-0.9.0-to-1.1.0.vsd",
-        "sha256": "0e8edc3bc1cc04f707bc3a15235674da6b396645cfabd108c7e243900f8caf1e",
-        "signature": "yB1glBXgOxapL7F8b77vAowlNGOBvZLukTkqwm5UZIysM9Q3zKqsNPAdbsvS+9GTD02G9dhZENSqO7TLqasNBQ=="
+        "sha256": "12d7550d0d9703c1d5489838fdf1c2ef8dab72e13b4c8b76751385aa73fbc8f0",
+        "signature": "0pOm54MniGrWaTV5NytBz6xXSQLi+q4K4Q4ps/N/fefk8XqsHXJIEs2pz1osLAB+nmTXeGYffgJbI+WrqG/tAA=="
       },
       {
         "from": "1.0.0",
         "url": "http://127.0.0.1:8080/any-1.0.0-to-1.1.0.vsd",
-        "sha256": "327175cc319b4061198c0dbce1a11c361effe3f48309167d7da2ab8e4ebc59db",
-        "signature": "UFdLDdBu+gtJ4lhfqnma7i66k0LCISZjn7xb37I7ou9XIzyBij58TCcPGqIxTZQtXGdEEHspVkwNa+bir9XRBQ=="
+        "sha256": "3be93b049fd27aa0955721add922981aca55eda721b771f80340e2c3434b014b",
+        "signature": "eLxL3IEzNEnLuxEDJy8mReaIoZJRWdq2XZZUD2rFWq94DgHlNgHha96tQCo3jVwAEYEX2kgjyRZTBCFnjQngDA=="
       }
     ],
     "macos-aarch64": [
       {
         "from": "0.9.0",
         "url": "http://127.0.0.1:8080/any-0.9.0-to-1.1.0.vsd",
-        "sha256": "0e8edc3bc1cc04f707bc3a15235674da6b396645cfabd108c7e243900f8caf1e",
-        "signature": "yB1glBXgOxapL7F8b77vAowlNGOBvZLukTkqwm5UZIysM9Q3zKqsNPAdbsvS+9GTD02G9dhZENSqO7TLqasNBQ=="
+        "sha256": "12d7550d0d9703c1d5489838fdf1c2ef8dab72e13b4c8b76751385aa73fbc8f0",
+        "signature": "0pOm54MniGrWaTV5NytBz6xXSQLi+q4K4Q4ps/N/fefk8XqsHXJIEs2pz1osLAB+nmTXeGYffgJbI+WrqG/tAA=="
       },
       {
         "from": "1.0.0",
         "url": "http://127.0.0.1:8080/any-1.0.0-to-1.1.0.vsd",
-        "sha256": "327175cc319b4061198c0dbce1a11c361effe3f48309167d7da2ab8e4ebc59db",
-        "signature": "UFdLDdBu+gtJ4lhfqnma7i66k0LCISZjn7xb37I7ou9XIzyBij58TCcPGqIxTZQtXGdEEHspVkwNa+bir9XRBQ=="
+        "sha256": "3be93b049fd27aa0955721add922981aca55eda721b771f80340e2c3434b014b",
+        "signature": "eLxL3IEzNEnLuxEDJy8mReaIoZJRWdq2XZZUD2rFWq94DgHlNgHha96tQCo3jVwAEYEX2kgjyRZTBCFnjQngDA=="
       }
     ],
     "windows-x86_64": [
       {
         "from": "0.9.0",
         "url": "http://127.0.0.1:8080/any-0.9.0-to-1.1.0.vsd",
-        "sha256": "0e8edc3bc1cc04f707bc3a15235674da6b396645cfabd108c7e243900f8caf1e",
-        "signature": "yB1glBXgOxapL7F8b77vAowlNGOBvZLukTkqwm5UZIysM9Q3zKqsNPAdbsvS+9GTD02G9dhZENSqO7TLqasNBQ=="
+        "sha256": "12d7550d0d9703c1d5489838fdf1c2ef8dab72e13b4c8b76751385aa73fbc8f0",
+        "signature": "0pOm54MniGrWaTV5NytBz6xXSQLi+q4K4Q4ps/N/fefk8XqsHXJIEs2pz1osLAB+nmTXeGYffgJbI+WrqG/tAA=="
       },
       {
         "from": "1.0.0",
         "url": "http://127.0.0.1:8080/any-1.0.0-to-1.1.0.vsd",
-        "sha256": "327175cc319b4061198c0dbce1a11c361effe3f48309167d7da2ab8e4ebc59db",
-        "signature": "UFdLDdBu+gtJ4lhfqnma7i66k0LCISZjn7xb37I7ou9XIzyBij58TCcPGqIxTZQtXGdEEHspVkwNa+bir9XRBQ=="
+        "sha256": "3be93b049fd27aa0955721add922981aca55eda721b771f80340e2c3434b014b",
+        "signature": "eLxL3IEzNEnLuxEDJy8mReaIoZJRWdq2XZZUD2rFWq94DgHlNgHha96tQCo3jVwAEYEX2kgjyRZTBCFnjQngDA=="
       }
     ],
     "windows-aarch64": [
       {
         "from": "0.9.0",
         "url": "http://127.0.0.1:8080/any-0.9.0-to-1.1.0.vsd",
-        "sha256": "0e8edc3bc1cc04f707bc3a15235674da6b396645cfabd108c7e243900f8caf1e",
-        "signature": "yB1glBXgOxapL7F8b77vAowlNGOBvZLukTkqwm5UZIysM9Q3zKqsNPAdbsvS+9GTD02G9dhZENSqO7TLqasNBQ=="
+        "sha256": "12d7550d0d9703c1d5489838fdf1c2ef8dab72e13b4c8b76751385aa73fbc8f0",
+        "signature": "0pOm54MniGrWaTV5NytBz6xXSQLi+q4K4Q4ps/N/fefk8XqsHXJIEs2pz1osLAB+nmTXeGYffgJbI+WrqG/tAA=="
       },
       {
         "from": "1.0.0",
         "url": "http://127.0.0.1:8080/any-1.0.0-to-1.1.0.vsd",
-        "sha256": "327175cc319b4061198c0dbce1a11c361effe3f48309167d7da2ab8e4ebc59db",
-        "signature": "UFdLDdBu+gtJ4lhfqnma7i66k0LCISZjn7xb37I7ou9XIzyBij58TCcPGqIxTZQtXGdEEHspVkwNa+bir9XRBQ=="
+        "sha256": "3be93b049fd27aa0955721add922981aca55eda721b771f80340e2c3434b014b",
+        "signature": "eLxL3IEzNEnLuxEDJy8mReaIoZJRWdq2XZZUD2rFWq94DgHlNgHha96tQCo3jVwAEYEX2kgjyRZTBCFnjQngDA=="
       }
     ]
   }

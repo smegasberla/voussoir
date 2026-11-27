@@ -313,6 +313,24 @@ impl App {
         // instead of only printed.
         diagnostics::init_from_env();
 
+        // An update installed on the previous run may not survive its own launch.
+        // The guard counts this launch and, on a second attempt with no
+        // confirmation, restores the copy the installer kept. It is a no-op when
+        // no update is pending, so a normal start pays one `exists` call.
+        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+        {
+            if let Ok(current) = std::env::current_exe() {
+                if let crate::rollback::Startup::RolledBack { restored, version } =
+                    crate::rollback::guard(&current)
+                {
+                    eprintln!("voussoir: {version} did not start; restored the previous build");
+                    // Start the restored binary as its own process: this one is
+                    // running the build that never reached a window.
+                    crate::updater::spawn_and_exit_for_rollback(restored);
+                }
+            }
+        }
+
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
 
@@ -435,6 +453,15 @@ impl App {
             ),
             &window,
         )?;
+
+        // The first window exists, which is the earliest proof this build is
+        // useful: the pending update is now the one to keep. Not after the event
+        // loop returns, because a bug the user hits later is something to fix,
+        // not a broken install to undo.
+        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+        if let Ok(current) = std::env::current_exe() {
+            crate::rollback::confirm(&current);
+        }
 
         // tao builds a window against `UIApplication`, which does not exist
         // until `event_loop.run` calls `UIApplicationMain`; iOS asks for the

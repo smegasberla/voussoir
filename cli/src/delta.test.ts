@@ -88,3 +88,47 @@ describe("a colliding block", () => {
     expect(applyPatch(old, patch)).toEqual(next);
   });
 });
+
+describe("compressed patches", () => {
+  test("a patch with real content is deflated and still applies", () => {
+    // Inserted machine code repeats, so deflate is worth doing: the same patch
+    // went from 45% to 23% of the artifact on a real release pair.
+    const old = Buffer.from("shared prefix ".repeat(100));
+    const next = Buffer.concat([
+      old,
+      Buffer.from("x".repeat(20_000)),
+      Buffer.from("shared prefix ".repeat(100)),
+    ]);
+    const patch = createPatch(old, next);
+    expect(patch.subarray(0, 4).toString()).toBe("VSC1");
+    expect(patch.length).toBeLessThan(2_000);
+    expect(applyPatch(old, patch)).toEqual(next);
+  });
+
+  test("a tiny patch stays uncompressed when deflate would grow it", () => {
+    // A one-constant rebuild is tens of bytes; adding a deflate stream to that
+    // would make the download bigger than the change.
+    const old = Buffer.from("the old binary with a shared tail");
+    const next = Buffer.from("the new binary with a shared tail");
+    const patch = createPatch(old, next);
+    expect(patch.subarray(0, 4).toString()).toBe("VSD1");
+    expect(applyPatch(old, patch)).toEqual(next);
+  });
+
+  test("an uncompressed patch from an older publisher still applies", () => {
+    // Feeds written before compression carry VSD1; those must not break.
+    const old = Buffer.from("AAAA-old");
+    const patch = Buffer.concat([
+      Buffer.from("VSD1"),
+      Buffer.from([2]),
+      Buffer.from([8, 0, 0, 0]),
+      Buffer.from("AAAA-new"),
+    ]);
+    expect(applyPatch(old, patch)).toEqual(Buffer.from("AAAA-new"));
+  });
+
+  test("a corrupt deflate stream is refused, not silently truncated", () => {
+    const patch = Buffer.concat([Buffer.from("VSC1"), Buffer.from("not deflate at all")]);
+    expect(() => applyPatch(Buffer.from("old"), patch)).toThrow();
+  });
+});

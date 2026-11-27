@@ -15,7 +15,7 @@
  * Usage: bun scripts/make-updater-fixture.ts
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { createPatch } from "../cli/src/delta.ts";
@@ -24,6 +24,13 @@ import { publicKeyBase64 } from "../cli/src/commands/keys.ts";
 
 const out = join(import.meta.dir, "..", "voussoir", "tests", "fixtures");
 mkdirSync(out, { recursive: true });
+// Clear the directory first: a rename or a dropped platform would otherwise
+// leave artifacts behind, and a stale `.vsd` in the fixture looks like one the
+// contract test covers while nothing references it.
+for (const name of readdirSync(out)) {
+  if (name === ".gitkeep") continue;
+  rmSync(join(out, name), { force: true });
+}
 
 // PKCS#8 wrapping for a raw Ed25519 seed: the fixed 16-byte prefix plus the seed.
 // This is the same key `ed25519_dalek::SigningKey::from_bytes(&[42; 32])` makes.
