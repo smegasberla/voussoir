@@ -9,7 +9,10 @@ import { join } from "node:path";
 import { boolFlag, type Args } from "../args.ts";
 import { findProject } from "../project.ts";
 
-type Check = { name: string; ok: boolean; detail: string };
+/** `note` is neither a pass nor a failure: the project check has no answer
+ *  before `init`, and failing there tells a first-time user their toolchain is
+ *  broken when the only thing missing is a directory of their own. */
+type Check = { name: string; ok: boolean; detail: string; note?: boolean };
 
 const BUN_VERSION = /^(\d+)\.(\d+)\./;
 
@@ -77,7 +80,10 @@ export async function doctor(args: Args): Promise<number> {
   checks.push({
     name: "project",
     ok: Boolean(project),
-    detail: project ? project.root : "no voussoir.json in this directory or a parent",
+    note: !project,
+    detail: project
+      ? project.root
+      : "no voussoir.json here yet; everything above is what an app needs",
   });
 
   if (project) {
@@ -96,14 +102,23 @@ export async function doctor(args: Args): Promise<number> {
   }
 
   if (boolFlag(args, "json")) {
-    console.log(JSON.stringify({ ok: checks.every((c) => c.ok), checks }, null, 2));
+    console.log(JSON.stringify({ ok: passed(checks), checks }, null, 2));
   } else {
     for (const check of checks) {
-      console.log(`${check.ok ? "ok  " : "FAIL"} ${check.name.padEnd(14)} ${check.detail}`);
+      const label = check.ok ? "ok  " : check.note ? "note" : "FAIL";
+      console.log(`${label} ${check.name.padEnd(14)} ${check.detail}`);
+    }
+    if (!project) {
+      console.log("\nNext: voussoir init         # scaffold an app in this directory");
     }
   }
 
-  return checks.every((c) => c.ok) ? 0 : 1;
+  return passed(checks) ? 0 : 1;
+}
+
+/** A note is not a failure, so it must not decide the exit code. */
+function passed(checks: Check[]): boolean {
+  return checks.every((check) => check.ok || check.note);
 }
 
 /** The package name for WebKit2GTK on this platform. */

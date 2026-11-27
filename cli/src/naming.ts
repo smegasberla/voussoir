@@ -22,6 +22,20 @@ export type Identifiers = {
   leaf: string;
 };
 
+/** Human-facing name from a directory slug, e.g. "my-notes" -> "My Notes".
+ *
+ *  Lives here rather than in `init` because it is one of the identifier
+ *  derivations: a directory name reaches a display string, a crate name, a lib
+ *  name and an Android package, and keeping them apart is how they drift.
+ */
+export function humanize(slug: string): string {
+  const base = slug === "." || slug === "" ? "voussoir-app" : slug;
+  return base
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
 /** Slug for directories and crates: lowercase, hyphens, no leading digits. */
 export function crateName(name: string): string {
   const base = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");

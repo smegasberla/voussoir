@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { voussoirAndroidDependency, voussoirDependency, voussoirIosDependency } from "../framework.ts";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
-import { identifiers } from "../naming.ts";
+import { humanize, identifiers } from "../naming.ts";
 
 import voussoirJson from "../../template/voussoir.json.tmpl" with { type: "text" };
 import cargoToml from "../../template/Cargo.toml.tmpl" with { type: "text" };
@@ -61,6 +61,16 @@ export function init(args: Args): number {
   // a `native/` tree it will never build, and carrying one invites the two
   // command lists to drift apart.
   const mobile = boolFlag(args, "mobile");
+  const desktopOnly = boolFlag(args, "desktop");
+  // iOS needs Xcode and only runs on macOS, so it is opt-in. Shipping an `ios/`
+  // tree nobody will ever build is the bloat this project exists to argue
+  // against, and it is the largest share of a scaffold's files.
+  const withIos = boolFlag(args, "ios");
+
+  if (mobile && desktopOnly) {
+    console.error("voussoir: `--mobile` and `--desktop` ask for opposite things");
+    return 1;
+  }
   const name = stringFlag(args, "name") ?? humanize(basename(dir));
   const ids = identifiers(name, stringFlag(args, "package"));
 
@@ -115,45 +125,52 @@ export function init(args: Args): number {
     write("native/commands/src/lib.rs", fill(commandsLib));
   }
 
-  // Android shell. Same app, different entry point and packaging.
-  write("android/Cargo.toml", fill(androidCargo));
-  write("android/src/lib.rs", fill(androidLib));
-  write("android/src/assets.rs", fill(androidAssets));
-  write("android/app/build.gradle", fill(androidBuildGradle));
-  write("android/app/settings.gradle", fill(androidSettings));
-  write("android/app/gradle.properties", fill(androidGradleProps(androidProps)));
-  write("android/app/src/main/AndroidManifest.xml", fill(androidManifest));
-  write("android/app/src/main/res/values/themes.xml", fill(androidThemes));
-  const java = `android/app/src/main/java/${ids.package.replace(/\./g, "/")}`;
-  write(`${java}/MainActivity.java`, fill(androidActivity));
-  write(`${java}/VoussoirDialogs.java`, fill(androidDialogs));
-  write(`${java}/VoussoirMenu.java`, fill(androidMenu));
-  write(`${java}/VoussoirTray.java`, fill(androidTray));
-  write(`${java}/VoussoirHttp.java`, fill(androidHttp));
+  // Android shell. Same app, different entry point and packaging. `--desktop`
+  // skips it: a desktop-only app has no use for a Gradle project it will never
+  // build, and this tree is most of the files in a scaffold.
+  if (!desktopOnly) {
+    write("android/Cargo.toml", fill(androidCargo));
+    write("android/src/lib.rs", fill(androidLib));
+    write("android/src/assets.rs", fill(androidAssets));
+    write("android/app/build.gradle", fill(androidBuildGradle));
+    write("android/app/settings.gradle", fill(androidSettings));
+    write("android/app/gradle.properties", fill(androidGradleProps(androidProps)));
+    write("android/app/src/main/AndroidManifest.xml", fill(androidManifest));
+    write("android/app/src/main/res/values/themes.xml", fill(androidThemes));
+    const java = `android/app/src/main/java/${ids.package.replace(/\./g, "/")}`;
+    write(`${java}/MainActivity.java`, fill(androidActivity));
+    write(`${java}/VoussoirDialogs.java`, fill(androidDialogs));
+    write(`${java}/VoussoirMenu.java`, fill(androidMenu));
+    write(`${java}/VoussoirTray.java`, fill(androidTray));
+    write(`${java}/VoussoirHttp.java`, fill(androidHttp));
 
-  // Instrumentation tests, in two layers. The first asserts pure data
-  // translation, which needs no window: menu ids, intent construction, MIME
-  // mapping. The second drives the real round trips on a device, which is the
-  // only place a `content://` URI becoming a path, a notification being posted, or
-  // a TLS request through the system trust store can be observed at all.
-  // `VoussoirDeviceSupport` is shared plumbing for both, not a test.
-  const androidTest = `android/app/src/androidTest/java/${ids.package.replace(/\./g, "/")}`;
-  write(`${androidTest}/VoussoirMenuTest.java`, fill(androidMenuTest));
-  write(`${androidTest}/VoussoirDialogsTest.java`, fill(androidDialogsTest));
-  write(`${androidTest}/VoussoirLifecycleTest.java`, fill(androidLifecycleTest));
-  write(`${androidTest}/VoussoirDeviceSupport.java`, fill(androidDeviceSupport));
-  write(`${androidTest}/VoussoirDeviceTest.java`, fill(androidDeviceTest));
+    // Instrumentation tests, in two layers. The first asserts pure data
+    // translation, which needs no window: menu ids, intent construction, MIME
+    // mapping. The second drives the real round trips on a device, which is the
+    // only place a `content://` URI becoming a path, a notification being posted, or
+    // a TLS request through the system trust store can be observed at all.
+    // `VoussoirDeviceSupport` is shared plumbing for both, not a test.
+    const androidTest = `android/app/src/androidTest/java/${ids.package.replace(/\./g, "/")}`;
+    write(`${androidTest}/VoussoirMenuTest.java`, fill(androidMenuTest));
+    write(`${androidTest}/VoussoirDialogsTest.java`, fill(androidDialogsTest));
+    write(`${androidTest}/VoussoirLifecycleTest.java`, fill(androidLifecycleTest));
+    write(`${androidTest}/VoussoirDeviceSupport.java`, fill(androidDeviceSupport));
+    write(`${androidTest}/VoussoirDeviceTest.java`, fill(androidDeviceTest));
+  }
 
   // iOS shell. Same app a third time: Swift's `main.swift` calls the staticlib's
   // entry as the first thing the process does, and XcodeGen generates the
   // .xcodeproj from the committed project.yml, which is the file you own.
-  write("ios/Cargo.toml", fill(iosCargo));
-  write("ios/src/lib.rs", fill(iosLib));
-  write("ios/src/assets.rs", fill(iosAssets));
-  write("ios/project.yml", fill(iosProjectYml));
-  write("ios/app/Info.plist", fill(iosPlist));
-  write("ios/app/main.swift", fill(iosMainSwift));
-  write("ios/app/VoussoirBridge.h", fill(iosBridge));
+  // Opt-in (`--ios`), because it needs Xcode and only builds on macOS.
+  if (!desktopOnly && withIos) {
+    write("ios/Cargo.toml", fill(iosCargo));
+    write("ios/src/lib.rs", fill(iosLib));
+    write("ios/src/assets.rs", fill(iosAssets));
+    write("ios/project.yml", fill(iosProjectYml));
+    write("ios/app/Info.plist", fill(iosPlist));
+    write("ios/app/main.swift", fill(iosMainSwift));
+    write("ios/app/VoussoirBridge.h", fill(iosBridge));
+  }
 
   // `cd .` is what an in-place scaffold would otherwise print, which is not an
   // instruction. Left out when the project was written into the current directory.
@@ -166,22 +183,18 @@ export function init(args: Args): number {
     next.push("  voussoir dev              # desktop, with hot reload");
     next.push("  voussoir build --size     # desktop release binary");
   }
-  next.push("  voussoir android build    # APK");
-  next.push("  voussoir android build --aab  # Play-ready bundle");
-  next.push("  voussoir android run      # install and launch on a device or emulator");
-  next.push("  voussoir ios build        # simulator app (macOS with Xcode)");
-  next.push("  voussoir ios run          # install and launch on a booted simulator");
+  if (!desktopOnly) {
+    next.push("  voussoir android build    # APK");
+    next.push("  voussoir android build --aab  # Play-ready bundle");
+    next.push("  voussoir android run      # install and launch on a device or emulator");
+  }
+  if (!desktopOnly && withIos) {
+    next.push("  voussoir ios build        # simulator app (macOS with Xcode)");
+    next.push("  voussoir ios run          # install and launch on a booted simulator");
+  }
   next.push("");
   console.log(next.join("\n"));
   return 0;
-}
-
-function humanize(slug: string): string {
-  const base = slug === "." || slug === "" ? "voussoir-app" : slug;
-  return base
-    .replace(/[-_]+/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-    .trim();
 }
 
 /** gradle.properties has no placeholders of its own; kept as a function so the
