@@ -41,3 +41,7 @@ voussoir-android/example/app/src/main/jniLibs/
 
 # Working bug-fix list; local only, never committed.
 /FIXES.md
+
+# Thumbnail output, and the TrueType copies resvg reads but woff2 it cannot.
+/thumbnail/out/
+/thumbnail/fonts/*.ttf
