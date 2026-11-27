@@ -9,6 +9,7 @@ import { parseArgs, type Args } from "./args.ts";
 import { fail } from "./proc.ts";
 import { keygen, sign as signArtifact } from "./commands/keys.ts";
 import { patch } from "./commands/patch.ts";
+import { release } from "./commands/release.ts";
 import { CLI_VERSION, update } from "./commands/update.ts";
 import { init } from "./commands/init.ts";
 import { dev } from "./commands/dev.ts";
@@ -33,6 +34,7 @@ Commands
   keygen         create the Ed25519 key that signs releases
   sign           print the sha256 and signature for a release artifact
   patch          build the delta between two release artifacts
+  release        assemble latest.json, with a signed delta against a previous version
   update         rebuild this CLI from its checkout (--check to only ask)
   android run    install and launch on a device or emulator
   ios build      cross-compile and build the simulator app (or --target device)
@@ -180,6 +182,28 @@ Options
   --key <path>     the Ed25519 private key (default: voussoir-signing-key.pem)
   --out <path>     where to write the patch
 `,
+  release: `voussoir release - assemble latest.json, with a signed delta
+
+Usage
+  voussoir release --version <x.y.z> --artifact <path> --base-url <url>
+
+  Writes the manifest the shell's updater reads: the artifact's sha256 and
+  Ed25519 signature and, when --previous is given, a VSD1 delta from that
+  version with its own hash and signature. The delta replaces the installed
+  binary only after it reconstructs bytes matching the manifest, so a hostile
+  patch can produce nothing installable.
+
+Options
+  --version <ver>    the version this release is
+  --artifact <path>  the built binary to publish
+  --base-url <url>   where the artifacts are served, no trailing slash needed
+  --platform <key>   linux-x86_64 and friends (default: this machine)
+  --previous <path>  the artifact of the version this one upgrades from
+  --from <ver>       that version's number; required with --previous
+  --notes <text>     release notes stored in the manifest
+  --key <path>       the Ed25519 private key (default: voussoir-signing-key.pem)
+  --out <path>       where to write the manifest (default: latest.json)
+`,
   update: `voussoir update - rebuild this CLI from its checkout
 
 Usage
@@ -262,6 +286,7 @@ const FLAGS: Record<string, string[]> = {
   keygen: ["out"],
   sign: ["key"],
   patch: ["from", "key", "out"],
+  release: ["version", "artifact", "base-url", "platform", "previous", "from", "notes", "key", "out"],
   update: ["check", "feed", "out", "force"],
   "android build": ["abi", "release", "aab", "api"],
   "android run": ["api", "wait"],
@@ -335,8 +360,10 @@ const args = parseArgs(argv);
 // Read before parsing: `--version` starts with a dash, so the parser would turn
 // it into the help command. A release build is checked with this before it is
 // published, which is what makes a mis-built binary fail the release instead of
-// reaching whoever updates into it.
-if (argv.includes("--version") || argv.includes("-V")) {
+// reaching whoever updates into it. A subcommand that takes a version of its own
+// (`voussoir release --version 1.2.0`) opts out by listing it in FLAGS.
+const takesOwnVersion = FLAGS[commandKey(args)]?.includes("version") === true;
+if (!takesOwnVersion && (argv.includes("--version") || argv.includes("-V"))) {
   console.log(CLI_VERSION);
   process.exit(0);
 }
@@ -382,6 +409,9 @@ switch (args.command) {
     break;
   case "patch":
     code = patch(args);
+    break;
+  case "release":
+    code = release(args);
     break;
   case "update":
     code = await update(args);

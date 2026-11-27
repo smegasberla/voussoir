@@ -17,43 +17,106 @@ function u32(value: number): Buffer {
   return out;
 }
 
+/** Hash helpers for the index.
+ *
+ *  A 94 MB binary has ~94M 32-byte windows, and a `Map` keyed by base64 strings
+ *  needed gigabytes to hold them: the first real release ran out of memory. A
+ *  fixed-size open-addressed table in two typed arrays bounds it at ~32 MB, and
+ *  a collision costs a longer patch, never a wrong one, because every copy is
+ *  checked by extending it against the real bytes.
+ */
+const BLOCK = 32;
+const MAX_SLOTS = 1 << 22;
+const PROBES = 8;
+const BASE = 0x01000193;
+const POW = (() => {
+  let p = 1;
+  for (let i = 0; i < BLOCK - 1; i++) p = Math.imul(p, BASE) >>> 0;
+  return p >>> 0;
+})();
+
+function hashAt(buf: Buffer, at: number): number {
+  let h = 0;
+  for (let i = 0; i < BLOCK; i++) h = (Math.imul(h, BASE) + buf[at + i]!) >>> 0;
+  return h;
+}
+
+/** Slide the window one byte: drop `out`, add `next`. */
+function roll(h: number, out: number, next: number): number {
+  return (Math.imul((h - Math.imul(out, POW)) >>> 0, BASE) + next) >>> 0;
+}
+
+/** Slot count: one per sampled position where possible, capped at 32 MB. */
+function slotsFor(length: number): number {
+  let bits = 16;
+  while (bits < MAX_SLOTS && 1 << bits < length) bits++;
+  return Math.min(1 << bits, MAX_SLOTS);
+}
+
 /** Build `patch` such that `applyPatch(old, patch)` equals `next`. */
 export function createPatch(old: Uint8Array, next: Uint8Array): Buffer {
   const oldBuf = Buffer.from(old);
   const nextBuf = Buffer.from(next);
-  const block = 32;
+  const oldLen = oldBuf.length;
+  const nextLen = nextBuf.length;
 
-  // Candidate offsets for each 32-byte run of the old binary. The cap keeps a
-  // pathological file (all zeros) from turning this into a quadratic scan.
-  const index = new Map<string, number[]>();
-  for (let i = 0; i + block <= oldBuf.length; i++) {
-    const key = oldBuf.subarray(i, i + block).toString("base64");
-    const list = index.get(key);
-    if (!list) index.set(key, [i]);
-    else if (list.length < 16) list.push(i);
+  const slots = slotsFor(oldLen);
+  const mask = slots - 1;
+  const hashes = new Uint32Array(slots);
+  const offsets = new Int32Array(slots).fill(-1);
+
+  const put = (h: number, offset: number) => {
+    const start = h & mask;
+    for (let probe = 0; probe < PROBES; probe++) {
+      const at = (start + probe) & mask;
+      if (offsets[at] === -1) {
+        hashes[at] = h;
+        offsets[at] = offset;
+        return;
+      }
+      if (hashes[at] === h) return; // first occurrence wins: the lowest offset
+    }
+  };
+
+  if (oldLen >= BLOCK) {
+    // Sampling keeps the index inside its cap; a stride of 1 covers small files
+    // and a large one still gets an anchor every few dozen bytes.
+    const stride = Math.max(1, Math.ceil(oldLen / slots));
+    let h = hashAt(oldBuf, 0);
+    for (let i = 0; i + BLOCK <= oldLen; i++) {
+      if (i % stride === 0) put(h, i);
+      if (i + BLOCK < oldLen) h = roll(h, oldBuf[i]!, oldBuf[i + BLOCK]!);
+    }
   }
 
   const parts: Buffer[] = [MAGIC];
-  let pending: Buffer[] = [];
-  let pendingLength = 0;
-  const flush = () => {
-    if (pendingLength === 0) return;
-    parts.push(Buffer.from([INSERT]), u32(pendingLength), ...pending);
-    pending = [];
-    pendingLength = 0;
+  let insertStart = -1;
+  const flushInsert = (end: number) => {
+    if (insertStart < 0) return;
+    parts.push(
+      Buffer.from([INSERT]),
+      u32(end - insertStart),
+      Buffer.from(nextBuf.subarray(insertStart, end)),
+    );
+    insertStart = -1;
   };
 
   let i = 0;
-  while (i < nextBuf.length) {
+  let h = nextLen >= BLOCK ? hashAt(nextBuf, 0) : 0;
+  while (i < nextLen) {
     let bestLength = 0;
     let bestOffset = 0;
-    if (i + block <= nextBuf.length) {
-      const key = nextBuf.subarray(i, i + block).toString("base64");
-      for (const offset of index.get(key) ?? []) {
-        let length = block;
+    if (i + BLOCK <= nextLen) {
+      const start = h & mask;
+      for (let probe = 0; probe < PROBES; probe++) {
+        const at = (start + probe) & mask;
+        if (offsets[at] === -1) break;
+        if (hashes[at] !== h) continue;
+        const offset = offsets[at]!;
+        let length = BLOCK;
         while (
-          offset + length < oldBuf.length &&
-          i + length < nextBuf.length &&
+          offset + length < oldLen &&
+          i + length < nextLen &&
           oldBuf[offset + length] === nextBuf[i + length]
         ) {
           length++;
@@ -64,18 +127,19 @@ export function createPatch(old: Uint8Array, next: Uint8Array): Buffer {
         }
       }
     }
-    if (bestLength >= block) {
-      flush();
+    if (bestLength >= BLOCK) {
+      flushInsert(i);
       parts.push(Buffer.from([COPY]), u32(bestOffset), u32(bestLength));
       i += bestLength;
+      // The window jumped, so the rolling hash cannot slide into place.
+      if (i + BLOCK <= nextLen) h = hashAt(nextBuf, i);
     } else {
-      pending.push(nextBuf.subarray(i, i + 1));
-      pendingLength++;
+      if (insertStart < 0) insertStart = i;
       i++;
-      if (pendingLength >= 1 << 20) flush();
+      if (i + BLOCK <= nextLen) h = roll(h, nextBuf[i - 1]!, nextBuf[i + BLOCK - 1]!);
     }
   }
-  flush();
+  flushInsert(nextLen);
   return Buffer.concat(parts);
 }
 

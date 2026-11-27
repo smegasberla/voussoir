@@ -67,6 +67,7 @@ Three rules:
 | `keygen` | create the Ed25519 key that signs releases | nothing |
 | `sign` | print the `sha256` and `signature` for an artifact | the signing key |
 | `patch` | build the delta between two artifacts | the signing key, optionally |
+| `release` | write `latest.json` with a signed delta | the signing key |
 | `update` | rebuild and replace the CLI from its `install.sh` checkout | `--feed` (or `VOUSSOIR_CLI_FEED`) for a prebuilt-binary feed; `--out` to write the binary elsewhere |
 
 ## `init`
@@ -291,6 +292,29 @@ voussoir patch old-app new-app --out app.patch --from 2.0.0 --key release.pem
 and prints both field sets: the patch's own hash/signature and the rebuilt
 artifact's, because the updater checks the restored binary against the artifact's
 signature. The shell's side is in [Updating the app](updater.md).
+
+`release` is those two in one step, producing the manifest the updater reads:
+
+```sh
+voussoir release --version 2.1.0 --artifact target/release/myapp \
+  --base-url https://downloads.example.com/myapp \
+  --previous myapp-2.0.0 --from 2.0.0 \
+  --key release.pem --out latest.json
+```
+
+It writes `latest.json` with the artifact's `url`, `sha256` and `signature`, and
+with `--previous` a `patches` entry whose delta is written beside the manifest
+and advertised under the URL it will be served from. Nothing is uploaded: the
+manifest names where you say it will live, and serving the files is yours.
+
+The delta is the reason to use it. On a 94 MB binary, a one-constant change
+produced a 45-byte patch: the updater downloads 45 bytes instead of 94 MB, then
+verifies the reconstructed binary against the artifact's own hash and signature,
+so the patch cannot introduce anything the full download would not have. A
+patch that reconstructs the wrong bytes, carries a bad signature, or is
+malformed replaces nothing; generation is single-digit seconds and bounded in
+memory, because the index is a fixed 32 MB table rather than one entry per
+32-byte window.
 
 ## Theory: what the CLI will never do
 
