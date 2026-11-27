@@ -12,7 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
@@ -262,6 +262,20 @@ export async function update(args: Args): Promise<number> {
 }
 
 /**
+ * True when the installed binary is older than the commit `HEAD` points at.
+ *
+ * `update` gated on "is the checkout behind origin", which is the wrong
+ * question when you install from the checkout you develop in: after a push,
+ * HEAD and origin match, so it reported "current" and returned while the binary
+ * on PATH predated the commit by days. The binary is what runs, so compare its
+ * mtime against the commit time instead.
+ */
+export function binaryOlderThanHead(target: string, headSeconds: number): boolean {
+  if (!existsSync(target)) return false;
+  return statSync(target).mtimeMs / 1000 < headSeconds;
+}
+
+/**
  * Rebuild the CLI from its checkout, the way `install.sh` installed it.
  *
  * A release feed would be the wrong shape for this project: there is no release
@@ -291,12 +305,28 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   const remote = git(["rev-parse", `origin/${branch}`]);
   const behind = before !== remote;
 
-  if (!behind && !force) {
+  // The checkout matching origin says nothing about the installed binary, which
+  // is the thing you actually run. A same-tree install is always "up to date"
+  // by the commit test, so catch a binary that predates HEAD as well.
+  const target = installTarget();
+  const headSeconds = Number(git(["log", "-1", "--format=%ct"]));
+  const stale = target !== undefined && binaryOlderThanHead(target, headSeconds);
+
+  if (!behind && !stale && !force) {
     console.log(`  ${CLI_VERSION} is current (checkout at ${before.slice(0, 7)})`);
     return 0;
   }
+  if (!behind && stale) {
+    console.log(`  installed binary is older than ${before.slice(0, 7)}; rebuilding`);
+  }
   if (checkOnly) {
-    console.log(`  update available: ${before.slice(0, 7)} -> ${remote.slice(0, 7)} in ${dir}`);
+    // Printing "50334d7 -> 50334d7" when only the binary is stale reads as a
+    // bug, so say which half is behind.
+    console.log(
+      behind
+        ? `  update available: ${before.slice(0, 7)} -> ${remote.slice(0, 7)} in ${dir}`
+        : `  update available: the installed binary predates ${before.slice(0, 7)}`,
+    );
     return 0;
   }
 
@@ -319,7 +349,6 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   // Only a compiled binary can be replaced. Run as `bun cli/src/index.ts`,
   // `process.execPath` is the Bun runtime itself, and installing over it would
   // destroy the toolchain the rebuild just used.
-  const target = installTarget();
   if (target === undefined) {
     console.log(`  rebuilt ${remote.slice(0, 7)}; ${built} is ready but nothing is installed to replace`);
     console.log("  run install.sh to install the CLI");
