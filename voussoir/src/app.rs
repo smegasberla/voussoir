@@ -15,6 +15,10 @@ use tao::{event::Event, event_loop::EventLoopBuilder, keyboard::ModifiersState};
 #[cfg(not(target_os = "ios"))]
 use tao::window::WindowBuilder;
 
+#[cfg(feature = "tray")]
+use crate::build_tray;
+#[cfg(not(target_os = "ios"))]
+use crate::build_webview;
 use crate::hooks::{CloseHook, Fired, ReadyHook};
 #[cfg(feature = "hot-reload")]
 use crate::hot;
@@ -22,8 +26,6 @@ use crate::hot;
 use crate::menu;
 #[cfg(feature = "tray")]
 use crate::tray;
-#[cfg(not(target_os = "ios"))]
-use crate::build_webview;
 use crate::{
     build_factory, diagnostics, event_loop, live, platform, print_latency_summary,
     register_builtins, reporting, windows, AppHandle, AssetTable, Config, Error, Registry,
@@ -31,8 +33,6 @@ use crate::{
 };
 #[cfg(feature = "menu")]
 use crate::{build_menu, menu_command_map};
-#[cfg(feature = "tray")]
-use crate::build_tray;
 
 /// The builder. Chain configuration, then `run()`.
 pub struct App {
@@ -311,7 +311,10 @@ impl App {
         reporting::install_panic_hook();
         // Chained after it, so a crash is on record before the process dies and the
         // next launch can say which build stopped and why.
-        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+        #[cfg(all(
+            feature = "updater",
+            not(any(target_os = "android", target_os = "ios"))
+        ))]
         crate::rollback::install_crash_hook();
         // Read before anything else can log, so a startup denial is recorded
         // instead of only printed.
@@ -321,7 +324,10 @@ impl App {
         // The guard counts this launch and, on a second attempt with no
         // confirmation, restores the copy the installer kept. It is a no-op when
         // no update is pending, so a normal start pays one `exists` call.
-        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+        #[cfg(all(
+            feature = "updater",
+            not(any(target_os = "android", target_os = "ios"))
+        ))]
         {
             if let Ok(current) = std::env::current_exe() {
                 if let crate::rollback::Startup::RolledBack {
@@ -469,7 +475,6 @@ impl App {
             &window,
         )?;
 
-
         // tao builds a window against `UIApplication`, which does not exist
         // until `event_loop.run` calls `UIApplicationMain`; iOS asks for the
         // first window through the event a `window.open` command uses and
@@ -559,7 +564,10 @@ impl App {
         // own teardown event is the last moment the totals are complete, and it
         // is also the only hook that fires on every platform.
         let summary_registry = Arc::clone(&registry);
-        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+        #[cfg(all(
+            feature = "updater",
+            not(any(target_os = "android", target_os = "ios"))
+        ))]
         let pending = std::env::current_exe().ok();
         event_loop.run(move |event, event_loop, control_flow| {
             if matches!(event, Event::LoopDestroyed) {
@@ -568,7 +576,10 @@ impl App {
                 // appears: only a deliberate shutdown proves the build runs. A
                 // build that crashes during use never reaches this, so its marker
                 // survives and the next launch reverts it.
-                #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+                #[cfg(all(
+                    feature = "updater",
+                    not(any(target_os = "android", target_os = "ios"))
+                ))]
                 if let Some(target) = &pending {
                     crate::rollback::confirm(target);
                 }

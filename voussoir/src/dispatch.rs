@@ -62,22 +62,28 @@ pub(crate) fn serve_bridge(
     let target = label.map(str::to_owned);
     let dispatch_target = target.clone();
     let script_handle = handle.clone();
-    registry.dispatch_for_window(handle, dispatch_target.as_deref(), &method, payload, move |body| {
-        // `body` is already an envelope; hand it to the page as JSON, not as a
-        // string, so the shim does not have to parse twice.
-        let script = format!(
-            "window.__voussoir_resolve&&window.__voussoir_resolve({}, {})",
-            id, body
-        );
-        // Only the window that asked: the shim's pending map and id counter are
-        // per frame, so evaluating in every window could resolve another
-        // window's promise with this reply. `None` is a caller with no window
-        // (the desktop bridge fallback) and keeps the broadcast behavior.
-        match &target {
-            Some(label) => script_handle.eval_window(label, &script),
-            None => script_handle.eval_all(&script),
-        }
-    });
+    registry.dispatch_for_window(
+        handle,
+        dispatch_target.as_deref(),
+        &method,
+        payload,
+        move |body| {
+            // `body` is already an envelope; hand it to the page as JSON, not as a
+            // string, so the shim does not have to parse twice.
+            let script = format!(
+                "window.__voussoir_resolve&&window.__voussoir_resolve({}, {})",
+                id, body
+            );
+            // Only the window that asked: the shim's pending map and id counter are
+            // per frame, so evaluating in every window could resolve another
+            // window's promise with this reply. `None` is a caller with no window
+            // (the desktop bridge fallback) and keeps the broadcast behavior.
+            match &target {
+                Some(label) => script_handle.eval_window(label, &script),
+                None => script_handle.eval_all(&script),
+            }
+        },
+    );
 }
 
 /// Serve one request, replying through wry's async responder so async commands
@@ -96,12 +102,9 @@ pub(crate) fn serve_async(
     builder = grant_fetch(builder, dev_origin.as_deref());
 
     if request.method() == "OPTIONS" {
-        responder.respond(
-            builder
-                .status(204)
-                .body(Cow::Borrowed(&[][..]))
-                .expect(STATIC_RESPONSE),
-        );
+        responder.respond(respond_or_500(
+            builder.status(204).body(Cow::Borrowed(&[][..])),
+        ));
         return;
     }
 
@@ -136,40 +139,50 @@ pub(crate) fn serve_async(
         registry.dispatch_for_window(&handle, label.as_deref(), &method, payload, move |body| {
             let mut response = base_headers(dev);
             response = grant_fetch(response, cors_origin.as_deref());
-            responder.respond(
+            responder.respond(respond_or_500(
                 response
                     .header(header::CONTENT_TYPE, "application/json")
                     .status(200)
-                    .body(Cow::Owned(body.into_bytes()))
-                    .expect(STATIC_RESPONSE),
-            );
+                    .body(Cow::Owned(body.into_bytes())),
+            ));
         });
         return;
     }
 
     let response = match lookup(assets, &path) {
-        Some((name, bytes)) => builder
-            .header(header::CONTENT_TYPE, content_type(name))
-            .status(200)
-            .body(bytes)
-            .expect(STATIC_RESPONSE),
-        None => builder
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .status(404)
-            .body(Cow::Borrowed(b"not found".as_slice()))
-            .expect(STATIC_RESPONSE),
+        Some((name, bytes)) => respond_or_500(
+            builder
+                .header(header::CONTENT_TYPE, content_type(name))
+                .status(200)
+                .body(bytes),
+        ),
+        None => respond_or_500(
+            builder
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .status(404)
+                .body(Cow::Borrowed(b"not found".as_slice())),
+        ),
     };
     responder.respond(response);
 }
 
-/// Headers every response carries. CSP is the important one: without it a page
-/// could pull a remote script into a context that holds the IPC bridge.
-/// The only way `http::Response::builder().body(_)` can fail is an invalid
-/// status or a malformed header value. Every response in this file uses a
-/// literal status and literal header names, so the failure is unreachable; saying
-/// so once here is what keeps the calls below from being an untriaged `unwrap`
-/// that a future edit could turn into a request-thread panic.
-const STATIC_RESPONSE: &str = "voussoir: a response with a literal status and headers cannot fail";
+/// Finish a response, falling back to a bare 500 if the builder rejects it.
+///
+/// Every response here uses a literal status and literal header names, so the
+/// builder cannot fail today, and that was previously asserted with `expect`.
+/// A panic is still the wrong answer on the IPC path: panic containment would
+/// turn it into a dead command for the page, while a 500 is a reply the page can
+/// report. `json_error` takes its status as an argument, so this is where a
+/// future dynamic status would land rather than a new panic.
+fn respond_or_500(
+    built: Result<Response<Cow<'static, [u8]>>, wry::http::Error>,
+) -> Response<Cow<'static, [u8]>> {
+    built.unwrap_or_else(|_| {
+        let mut response = Response::new(Cow::Borrowed(b"internal error".as_slice()));
+        *response.status_mut() = wry::http::StatusCode::INTERNAL_SERVER_ERROR;
+        response
+    })
+}
 
 fn base_headers(dev: bool) -> wry::http::response::Builder {
     Response::builder()
@@ -215,9 +228,10 @@ fn json_error(
     message: &str,
 ) -> Response<Cow<'static, [u8]>> {
     let body = format!(r#"{{"error":{}}}"#, serde_json::Value::from(message));
-    response
-        .header(header::CONTENT_TYPE, "application/json")
-        .status(status)
-        .body(Cow::Owned(body.into_bytes()))
-        .expect(STATIC_RESPONSE)
+    respond_or_500(
+        response
+            .header(header::CONTENT_TYPE, "application/json")
+            .status(status)
+            .body(Cow::Owned(body.into_bytes())),
+    )
 }

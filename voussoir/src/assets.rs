@@ -118,9 +118,16 @@ mod tests {
     #[test]
     fn a_large_sorted_table_finds_files_and_falls_back_for_old_tables() {
         static SORTED: &[(&str, &[u8])] = &[
-            ("a.js", b"a"), ("b.js", b"b"), ("c.js", b"c"), ("d.js", b"d"),
-            ("e.js", b"e"), ("f.js", b"f"), ("g.js", b"g"), ("h.js", b"h"),
-            ("index.html", b"index"), ("z.js", b"z"),
+            ("a.js", b"a"),
+            ("b.js", b"b"),
+            ("c.js", b"c"),
+            ("d.js", b"d"),
+            ("e.js", b"e"),
+            ("f.js", b"f"),
+            ("g.js", b"g"),
+            ("h.js", b"h"),
+            ("index.html", b"index"),
+            ("z.js", b"z"),
         ];
         assert_eq!(lookup(SORTED, "/index.html").unwrap().0, "index.html");
         assert_eq!(lookup(SORTED, "/c.js").unwrap().0, "c.js");
@@ -129,9 +136,16 @@ mod tests {
         // An older generated table is not guaranteed to be sorted; the scan
         // fallback keeps it authoritative.
         static UNSORTED: &[(&str, &[u8])] = &[
-            ("z.js", b"z"), ("b.js", b"b"), ("c.js", b"c"), ("d.js", b"d"),
-            ("e.js", b"e"), ("f.js", b"f"), ("g.js", b"g"), ("h.js", b"h"),
-            ("index.html", b"index"), ("a.js", b"a"),
+            ("z.js", b"z"),
+            ("b.js", b"b"),
+            ("c.js", b"c"),
+            ("d.js", b"d"),
+            ("e.js", b"e"),
+            ("f.js", b"f"),
+            ("g.js", b"g"),
+            ("h.js", b"h"),
+            ("index.html", b"index"),
+            ("a.js", b"a"),
         ];
         assert_eq!(lookup(UNSORTED, "/a.js").unwrap().0, "a.js");
         assert_eq!(lookup(UNSORTED, "/z.js").unwrap().0, "z.js");

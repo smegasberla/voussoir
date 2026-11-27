@@ -2,6 +2,11 @@
 name = "voussoir"
 version = "0.1.0"
 edition = "2021"
+# The oldest toolchain this crate is built and checked against, and a CI job
+# compiles at exactly this version. Without it a dependency's `rust-version` bump
+# reaches users as a build failure with no warning; with it, cargo refuses the
+# upgrade and names the constraint instead.
+rust-version = "1.85"
 description = "Minimal Rust runtime shell: OS webview + tao window + generic JSON IPC"
 license = "MIT"
 authors = ["smegasberla <smegasberla@gmail.com>"]

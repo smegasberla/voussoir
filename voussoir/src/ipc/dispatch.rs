@@ -228,9 +228,7 @@ impl super::registry::Registry {
                             hot.call(&method, &payload)
                         }))
                         .unwrap_or_else(|_| {
-                            error_envelope(&Error::Handler(
-                                "hot command call failed".to_owned(),
-                            ))
+                            error_envelope(&Error::Handler("hot command call failed".to_owned()))
                         });
                         // Both guards go before the reply, so the counts have
                         // moved by the time the page is woken.

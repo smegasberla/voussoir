@@ -65,11 +65,20 @@ pub mod transport;
 
 pub mod windows;
 
+/// Patch application for the updater; the generator lives in the CLI.
+#[cfg(feature = "updater")]
+pub mod delta;
 #[cfg(feature = "dialogs")]
 pub mod dialogs;
 pub mod live;
 #[cfg(feature = "menu")]
 pub mod menu;
+/// Undoing an update whose build never reaches its first window.
+#[cfg(all(
+    feature = "updater",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+pub mod rollback;
 #[cfg(feature = "rt")]
 pub mod rt;
 pub mod state;
@@ -79,12 +88,6 @@ pub mod storage;
 pub mod tray;
 #[cfg(feature = "updater")]
 pub mod updater;
-/// Patch application for the updater; the generator lives in the CLI.
-#[cfg(feature = "updater")]
-pub mod delta;
-/// Undoing an update whose build never reaches its first window.
-#[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
-pub mod rollback;
 
 pub use app::platform_name;
 pub use app::App;

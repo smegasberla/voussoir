@@ -29,10 +29,8 @@ const CHILD_ENV: &str = "VOUSSOIR_ROLLBACK_CHILD_DIR";
 const SELF: &str = "a_process_that_panics_leaves_the_update_pending";
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "voussoir-lifecycle-{}-{name}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("voussoir-lifecycle-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -125,7 +123,11 @@ fn a_process_that_panics_leaves_the_update_pending() {
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&target).unwrap().permissions().mode();
-        assert_eq!(mode & 0o111, 0o111, "the restored binary lost its executable bit");
+        assert_eq!(
+            mode & 0o111,
+            0o111,
+            "the restored binary lost its executable bit"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -358,7 +358,10 @@ mod tests {
         let bad = TrayConfig::new("Notes").icon(vec![0; 7], 16, 16);
         let error = bad.validate().unwrap_err();
         assert!(error.contains("16x16") && error.contains("7"), "{error}");
-        assert!(TrayConfig::new("Notes").icon(vec![0; 4], 0, 1).validate().is_err());
+        assert!(TrayConfig::new("Notes")
+            .icon(vec![0; 4], 0, 1)
+            .validate()
+            .is_err());
     }
 
     #[test]

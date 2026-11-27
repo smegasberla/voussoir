@@ -71,7 +71,10 @@ fn the_generated_manifest_parses_into_what_the_installer_expects() {
     // bytes the generator actually signed.
     assert_eq!(parsed.sha256, sha256_hex(&new));
     let signature = parsed.signature.as_deref().expect("the artifact is signed");
-    assert!(verify(&new, signature), "the artifact signature must verify");
+    assert!(
+        verify(&new, signature),
+        "the artifact signature must verify"
+    );
 }
 
 #[test]
@@ -99,7 +102,11 @@ fn every_offered_patch_reconstructs_the_signed_artifact() {
         assert!(verify(&patch, signature), "{patch_name} signature");
 
         let rebuilt = voussoir::delta::apply(&old, &patch).expect("the patch applies");
-        assert_eq!(sha256_hex(&rebuilt), parsed.sha256, "{patch_name} rebuilt bytes");
+        assert_eq!(
+            sha256_hex(&rebuilt),
+            parsed.sha256,
+            "{patch_name} rebuilt bytes"
+        );
         assert_eq!(rebuilt, new, "{patch_name} rebuilt bytes");
     }
 }

@@ -608,7 +608,11 @@ fn many_concurrent_async_fns_all_answer() {
             }
         }
     }
-    assert_eq!(seen.len() + busy, 64, "every request must answer exactly once");
+    assert_eq!(
+        seen.len() + busy,
+        64,
+        "every request must answer exactly once"
+    );
     assert!(!seen.is_empty(), "the cap must still let work through");
 }
 

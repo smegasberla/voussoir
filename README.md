@@ -326,6 +326,16 @@ Every user-visible change goes into `CHANGELOG.md` in Keep a Changelog format, s
 "is this upgrade safe for my app?" is answerable from the changelog plus the lists
 above.
 
+**Rust version.** The declared MSRV is in `voussoir/Cargo.toml` as `rust-version`,
+and a CI job compiles at exactly that version, so the number is checked rather than
+claimed. Raising it is a deliberate change with a changelog entry, never a side
+effect of a dependency bump.
+
+**Self-update is new.** The update path has been verified end to end — signed
+artifact, decompressed patch, rollback after a launch that never confirmed — but it
+shipped in 0.1.0 and has not yet been through a broken release in the field. If you
+depend on it, test your own update path against a staging feed before you need it.
+
 ## Repository
 
 ```
@@ -350,6 +360,13 @@ The book in `docs/src` is the narrative version: installing, your first app,
 `voussoir docs --check` validates its structure and every cross-chapter link in
 CI, and `voussoir docs` renders the same files into `website/dist`. The published
 copy is at **https://voussoir-app.pages.dev**.
+
+## Security
+
+Report a vulnerability privately: see [SECURITY.md](SECURITY.md). That file also
+says what is in scope, what the response times are, and which guarantees are already
+asserted in CI. Dependency advisories, licences and sources are checked by
+`cargo deny` against [`deny.toml`](deny.toml) on every push.
 
 ## Contributing
 

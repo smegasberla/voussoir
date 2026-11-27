@@ -37,7 +37,10 @@ pub(crate) enum UserEvent {
     #[cfg(feature = "menu")]
     MenuUpdate(live::Change),
     /// Run a script, in every window when `label` is `None`, else only there.
-    Eval { label: Option<String>, script: String },
+    Eval {
+        label: Option<String>,
+        script: String,
+    },
 }
 /// A handle passed to command handlers. Cheap to clone, safe to send to other
 /// threads, and the only way to push data into the page or open a window.

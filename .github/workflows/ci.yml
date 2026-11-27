@@ -123,6 +123,46 @@ jobs:
       - name: Hot-reload end-to-end (headless)
         run: xvfb-run -a bun scripts/verify-hot.ts
 
+  msrv:
+    name: MSRV (declared rust-version)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install webview and build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+      # Reads the pinned version out of the manifest instead of repeating it here,
+      # so the job and the crate cannot drift apart.
+      - name: Read the declared MSRV
+        id: msrv
+        run: echo "version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["rust_version"])')" >> "$GITHUB_OUTPUT"
+      # The point of declaring an MSRV is that it is true. A dependency's
+      # `rust-version` bump otherwise reaches users as a build failure with no
+      # warning; here it fails the pull request that caused it.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - name: Build at the documented MSRV
+        run: cargo check -p voussoir --features full
+      - name: Build the minimal shell at the MSRV
+        run: cargo check -p voussoir
+
+  dependencies:
+    name: Dependencies (advisories, licences, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # Every section of deny.toml is enforced: a known advisory, a licence
+          # outside the allow list, a second copy of a TLS/crypto stack, or a
+          # dependency from a git URL all fail here rather than shipping.
+          command: check
+          arguments: --all-features
+
   windows:
     name: Windows (build, test)
     runs-on: windows-latest

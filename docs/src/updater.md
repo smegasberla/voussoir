@@ -321,5 +321,16 @@ it for you is a framework that makes it wrong for someone.
 
 ## Next
 
+## How mature is this?
+
+The mechanics are tested: a signed artifact, a decompressed patch, and a rollback
+after a launch that never confirmed each have a test that fails without them. What
+cannot be tested in a checkout is field exposure. This path shipped in 0.1.0, so it
+has not yet carried a genuinely broken release to users and back.
+
+Treat it accordingly: run your own update against a staging feed once, deliberately,
+before you need it to work. Silently trusting an untried update path is how a
+self-updating app becomes unrecoverable.
+
 - [Packaging](packaging.md) — what a version number means once it ships.
 - [Compatibility policy](compatibility.md) — what an upgrade costs.

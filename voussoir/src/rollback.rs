@@ -218,7 +218,10 @@ pub fn record_crash(target: &Path, message: &str) {
         .take(CRASH_NOTE_LIMIT)
         .map(|c| if c == '\n' { ' ' } else { c })
         .collect();
-    let _ = std::fs::write(&marker, format!("{version}\n{attempts}\n{CRASH_PREFIX}{note}\n"));
+    let _ = std::fs::write(
+        &marker,
+        format!("{version}\n{attempts}\n{CRASH_PREFIX}{note}\n"),
+    );
 }
 
 /// The app shut down on its own terms: the pending update is now the one to keep.
@@ -244,10 +247,8 @@ mod tests {
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "voussoir-rollback-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("voussoir-rollback-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -323,7 +324,10 @@ mod tests {
         match guard(&target) {
             Startup::RolledBack { version, crash, .. } => {
                 assert_eq!(version, "2.0.0");
-                assert_eq!(crash.as_deref(), Some("index out of bounds at src/page.rs:12"));
+                assert_eq!(
+                    crash.as_deref(),
+                    Some("index out of bounds at src/page.rs:12")
+                );
             }
             other => panic!("expected a rollback, got {other:?}"),
         }
@@ -338,13 +342,20 @@ mod tests {
         let dir = temp("crash-note");
         let target = installed(&dir, b"old", b"new");
         assert_eq!(guard(&target), Startup::Continue);
-        record_crash(&target, &format!("first line\nsecond line {}", "x".repeat(500)));
+        record_crash(
+            &target,
+            &format!("first line\nsecond line {}", "x".repeat(500)),
+        );
 
         match guard(&target) {
             Startup::RolledBack { crash, .. } => {
                 let note = crash.expect("the note should be recorded");
                 assert!(!note.contains('\n'), "the note kept a newline: {note:?}");
-                assert!(note.chars().count() <= CRASH_NOTE_LIMIT, "note was {} chars", note.chars().count());
+                assert!(
+                    note.chars().count() <= CRASH_NOTE_LIMIT,
+                    "note was {} chars",
+                    note.chars().count()
+                );
             }
             other => panic!("expected a rollback, got {other:?}"),
         }

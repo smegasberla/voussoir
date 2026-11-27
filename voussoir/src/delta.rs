@@ -152,9 +152,9 @@ mod tests {
     fn copies_and_inserts_rebuild_a_binary() {
         let old = b"the-old-binary-tail";
         let p = patch(&[
-            (COPY, &[0, 0, 0, 0, 3, 0, 0, 0]),           // "the"
-            (INSERT, &[3, 0, 0, 0, b'n', b'e', b'w']),     // "new"
-            (COPY, &[3, 0, 0, 0, 12, 0, 0, 0]),            // "-old-binary-"
+            (COPY, &[0, 0, 0, 0, 3, 0, 0, 0]),         // "the"
+            (INSERT, &[3, 0, 0, 0, b'n', b'e', b'w']), // "new"
+            (COPY, &[3, 0, 0, 0, 12, 0, 0, 0]),        // "-old-binary-"
         ]);
         assert_eq!(apply(old, &p).unwrap(), b"thenew-old-binary-");
     }
@@ -177,13 +177,22 @@ mod tests {
         assert!(error.contains("missing VSD1"), "{error}");
 
         let truncated = patch(&[(COPY, &[0, 0])]);
-        assert!(apply(b"old", &truncated).unwrap_err().to_string().contains("length"));
+        assert!(apply(b"old", &truncated)
+            .unwrap_err()
+            .to_string()
+            .contains("length"));
 
         let unknown = patch(&[(7, &[])]);
-        assert!(apply(b"old", &unknown).unwrap_err().to_string().contains("unknown opcode"));
+        assert!(apply(b"old", &unknown)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown opcode"));
 
         let short_insert = patch(&[(INSERT, &[5, 0, 0, 0, b'a'])]);
-        assert!(apply(b"old", &short_insert).unwrap_err().to_string().contains("only 1 remain"));
+        assert!(apply(b"old", &short_insert)
+            .unwrap_err()
+            .to_string()
+            .contains("only 1 remain"));
     }
 
     #[test]
