@@ -332,7 +332,13 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   git(["fetch", "--quiet", "origin"]);
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
   const remote = git(["rev-parse", `origin/${branch}`]);
-  const behind = before !== remote;
+
+  // Directional, not `before !== remote`. A branch with local commits differs
+  // from origin in the other direction, and calling that "behind" printed
+  // `af496eb -> 26abf61`, which reads as an update but would go backwards.
+  const behindCount = Number(git(["rev-list", "--count", `HEAD..origin/${branch}`]));
+  const aheadCount = Number(git(["rev-list", "--count", `origin/${branch}..HEAD`]));
+  const behind = behindCount > 0;
 
   // The checkout matching origin says nothing about the installed binary, which
   // is the thing you actually run. Compare the commit it was built from against
@@ -343,7 +349,12 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   const stale = target !== undefined && !buildIsFresh(git, dir, recorded, before);
 
   if (!behind && !stale && !force) {
-    console.log(`  ${CLI_VERSION} is current (checkout at ${before.slice(0, 7)})`);
+    // Unpushed local work is worth saying out loud: the binary is current for
+    // this checkout even though origin does not have those commits yet.
+    const local =
+      aheadCount === 1 ? "1 local commit not pushed" : `${aheadCount} local commits not pushed`;
+    const suffix = aheadCount > 0 ? `, ${local}` : "";
+    console.log(`  ${CLI_VERSION} is current (checkout at ${before.slice(0, 7)}${suffix})`);
     return 0;
   }
   if (!behind && stale) {
@@ -363,7 +374,14 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   }
 
   // Fast-forward only: a checkout with local commits is someone's work in
-  // progress, and replacing their binary over it would be the wrong move.
+  // progress, and replacing their binary over it would be the wrong move. When
+  // the branch has diverged there is no fast-forward to make, so say that rather
+  // than letting git fail with "Not possible to fast-forward".
+  if (behind && aheadCount > 0) {
+    throw new Error(
+      `${aheadCount} local commit(s) on ${branch} block the update; push or stash them, then run update again`,
+    );
+  }
   git(["merge", "--ff-only", `origin/${branch}`]);
 
   console.log("  rebuilding...");

@@ -414,3 +414,118 @@ describe("Freshness over cli/", () => {
     }
   });
 });
+
+describe("Direction against origin", () => {
+  /** A checkout with a bare origin, so `rev-list` counts mean something. */
+  function withOrigin(): { work: string; share: string; run: (argv: string[], cwd?: string) => string } {
+    const root = mkdtempSync(join(tmpdir(), "voussoir-dir-"));
+    const run = (argv: string[], cwd = root) => {
+      const out = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+      if (out.exitCode !== 0) throw new Error(out.stderr.toString());
+      return out.stdout.toString().trim();
+    };
+    run(["git", "init", "-q", "--bare", "origin.git"]);
+    run(["git", "clone", "-q", "origin.git", "work"]);
+    const work = join(root, "work");
+    const identity: Array<[string, string]> = [
+      ["user.email", "t@example.invalid"],
+      ["user.name", "t"],
+      ["commit.gpgsign", "false"],
+    ];
+    for (const [key, value] of identity) {
+      run(["git", "config", key, value], work);
+    }
+    mkdirSync(join(work, "cli"), { recursive: true });
+    writeFileSync(join(work, "cli", "package.json"), '{"name":"x"}\n');
+    writeFileSync(join(work, "Cargo.toml"), '[package]\nname="x"\n');
+    run(["git", "add", "."], work);
+    run(["git", "commit", "-qm", "one"], work);
+    run(["git", "push", "-q", "origin", "HEAD"], work);
+    return { work, share: join(root, "share"), run };
+  }
+
+  const counts = (work: string, run: (a: string[], c?: string) => string) => {
+    const branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], work);
+    return {
+      behind: Number(run(["git", "rev-list", "--count", `HEAD..origin/${branch}`], work)),
+      ahead: Number(run(["git", "rev-list", "--count", `origin/${branch}..HEAD`], work)),
+    };
+  };
+
+  const outputOf = async (work: string, share: string): Promise<string> => {
+    const previous = { src: process.env.VOUSSOIR_SRC, xdg: process.env.XDG_DATA_HOME };
+    process.env.VOUSSOIR_SRC = work;
+    process.env.XDG_DATA_HOME = share;
+    mkdirSync(join(share, "voussoir"), { recursive: true });
+    writeFileSync(
+      join(share, "voussoir", "built"),
+      Bun.spawnSync(["git", "-C", work, "rev-parse", "HEAD"]).stdout.toString(),
+    );
+    const logged: string[] = [];
+    const log = console.log;
+    console.log = (...parts: unknown[]) => logged.push(parts.join(" "));
+    try {
+      await update(parseArgs(["update", "--check"]));
+    } finally {
+      console.log = log;
+      for (const [k, v] of [
+        ["VOUSSOIR_SRC", previous.src],
+        ["XDG_DATA_HOME", previous.xdg],
+      ] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    return logged.join("\n");
+  };
+
+  test("a local commit ahead of origin is not an update", () => {
+    // `before !== remote` called this behind and printed `af496eb -> 26abf61`,
+    // a range that reads as an update but would move the binary backwards.
+    const { work, share, run } = withOrigin();
+    try {
+      writeFileSync(join(work, "local.txt"), "x\n");
+      run(["git", "add", "."], work);
+      run(["git", "commit", "-qm", "local only"], work);
+      expect(counts(work, run)).toEqual({ behind: 0, ahead: 1 });
+    } finally {
+      rmSync(join(work, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("says current and names the unpushed commit", async () => {
+    const { work, share, run } = withOrigin();
+    try {
+      writeFileSync(join(work, "local.txt"), "x\n");
+      run(["git", "add", "."], work);
+      run(["git", "commit", "-qm", "local only"], work);
+      const output = await outputOf(work, share);
+      expect(output).toContain("is current");
+      expect(output).toContain("1 local commit not pushed");
+      expect(output).not.toContain("update available");
+    } finally {
+      rmSync(join(work, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("a genuinely older checkout still reports an update", async () => {
+    const { work, share, run } = withOrigin();
+    const root = join(work, "..");
+    try {
+      // Someone else pushes; this checkout has not seen it.
+      run(["git", "clone", "-q", "origin.git", "other"], root);
+      const other = join(root, "other");
+      run(["git", "config", "user.email", "t@example.invalid"], other);
+      run(["git", "config", "user.name", "t"], other);
+      writeFileSync(join(other, "new.txt"), "x\n");
+      run(["git", "add", "."], other);
+      run(["git", "commit", "-qm", "later"], other);
+      run(["git", "push", "-q", "origin", "HEAD"], other);
+
+      const output = await outputOf(work, share);
+      expect(output).toContain("update available");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
