@@ -263,24 +263,32 @@ process allows. Windows refuses to replace a running executable but allows renam
 it, so the old file steps aside as `<name>.old`, is restored if the follow-up rename
 fails, and is swept up by the next install.
 
-**Launch rollback.** Renaming safely protects the install, not the launch. A build
-that is the wrong architecture, misses a library, or panics before its first window
-replaces a working app with a broken one, and nothing at install time can tell.
+**Launch and crash rollback.** Renaming safely protects the install, not the launch.
+A build that is the wrong architecture, misses a library, panics before its first
+window, or dies at any point during use replaces a working app with a broken one, and
+nothing at install time can tell.
 
 So an install leaves two files beside the binary: `<name>.voussoir-previous`, a copy
 of the build that was running, and `<name>.voussoir-pending`, naming the version just
-installed. The first launch of the new build increments that marker and proceeds. Once
-the first window exists the marker and the copy are deleted, which is the earliest
-proof the build is useful. If a second launch finds the marker still there, the new
-build never got that far: the previous copy is renamed back over it and started, and
-one line on stderr says which version was restored.
+installed. The first launch of the new build increments that marker and proceeds.
+
+The marker is deleted on exactly one event: a **clean shutdown**, from the event
+loop's teardown. Only a deliberate exit proves a build runs, so a session that ends
+any other way leaves the marker where it is, whether the build never reached a
+window, panicked later, was killed, or lost power. The next launch therefore has
+something to act on: the previous copy is renamed back over the build, started, and
+one line on stderr says which version was restored and, when the build managed to
+record a panic, why it stopped.
 
 Two launches, not one, because a launch can fail for reasons unrelated to the
 update: no display, a locked profile, a kill from the OS. Rolling back on the first
-failure would undo good updates. A crash the user hits later is a bug to fix, not a
-broken install to undo, which is why confirmation happens at the first window rather
-than after the event loop returns. When no copy could be kept, the marker is not
-written and the update simply cannot be undone.
+failure would undo good updates. The same trade applies to the crash case, and it is
+worth stating plainly: an app killed from outside looks exactly like one that
+crashed, so a good build can be reverted once after a kill. It is then clean, the
+marker is gone, and the update is simply offered again. That is the intended
+trade, because a build that crashes is worth reverting even at the price of
+reverting one that was merely interrupted. When no copy could be kept, the marker is
+never written and the update simply cannot be undone.
 
 ## Android and iOS
 
@@ -298,9 +306,10 @@ silently failing.
 
 - **No key rotation.** One `update.public_key` per config; switching keys means
   shipping a build with the new one.
-- **No rollback after the first window.** Launch rollback covers a build that never
-  gets that far; a build that starts and then misbehaves is a bug to fix, not an
-  install to undo.
+- **No rollback while the app is still running.** A build that misbehaves without
+  exiting (a broken page, a command that returns the wrong data) is a bug to fix,
+  not an install to undo; the reversion happens on the next start, and only when the
+  previous session did not shut down cleanly.
 - **No background updates.** `update.apply` runs when the page asks; nothing checks
   on a timer, because that decision belongs to the app's UX and its store policy.
 

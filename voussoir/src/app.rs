@@ -309,6 +309,10 @@ impl App {
     /// the frontend hot-reloads without touching Rust. Release builds ignore it.
     pub fn run(self) -> Result<(), Error> {
         reporting::install_panic_hook();
+        // Chained after it, so a crash is on record before the process dies and the
+        // next launch can say which build stopped and why.
+        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+        crate::rollback::install_crash_hook();
         // Read before anything else can log, so a startup denial is recorded
         // instead of only printed.
         diagnostics::init_from_env();
@@ -320,10 +324,21 @@ impl App {
         #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
         {
             if let Ok(current) = std::env::current_exe() {
-                if let crate::rollback::Startup::RolledBack { restored, version } =
-                    crate::rollback::guard(&current)
+                if let crate::rollback::Startup::RolledBack {
+                    restored,
+                    version,
+                    crash,
+                } = crate::rollback::guard(&current)
                 {
-                    eprintln!("voussoir: {version} did not start; restored the previous build");
+                    match crash {
+                        Some(reason) => eprintln!(
+                            "voussoir: {version} stopped without exiting cleanly ({reason}); \
+                             restored the previous build"
+                        ),
+                        None => eprintln!(
+                            "voussoir: {version} did not start; restored the previous build"
+                        ),
+                    }
                     // Start the restored binary as its own process: this one is
                     // running the build that never reached a window.
                     crate::updater::spawn_and_exit_for_rollback(restored);
@@ -454,14 +469,6 @@ impl App {
             &window,
         )?;
 
-        // The first window exists, which is the earliest proof this build is
-        // useful: the pending update is now the one to keep. Not after the event
-        // loop returns, because a bug the user hits later is something to fix,
-        // not a broken install to undo.
-        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
-        if let Ok(current) = std::env::current_exe() {
-            crate::rollback::confirm(&current);
-        }
 
         // tao builds a window against `UIApplication`, which does not exist
         // until `event_loop.run` calls `UIApplicationMain`; iOS asks for the
@@ -552,9 +559,19 @@ impl App {
         // own teardown event is the last moment the totals are complete, and it
         // is also the only hook that fires on every platform.
         let summary_registry = Arc::clone(&registry);
+        #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+        let pending = std::env::current_exe().ok();
         event_loop.run(move |event, event_loop, control_flow| {
             if matches!(event, Event::LoopDestroyed) {
                 print_latency_summary(&summary_registry);
+                // The pending update is confirmed here, not when the first window
+                // appears: only a deliberate shutdown proves the build runs. A
+                // build that crashes during use never reaches this, so its marker
+                // survives and the next launch reverts it.
+                #[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+                if let Some(target) = &pending {
+                    crate::rollback::confirm(target);
+                }
             }
             event_loop::dispatch(&mut state, event, event_loop, control_flow);
         });
