@@ -42,6 +42,24 @@ describe("command errors", () => {
   });
 });
 
+describe("doctor before init", () => {
+  test("a missing project is a note, not a failure", () => {
+    // `doctor` is what you run to check your toolchain *before* scaffolding, so
+    // a missing `voussoir.json` must not be reported as FAIL or it reads as a
+    // broken install. It also has to point at the way forward.
+    const cwd = mkdtempSync(join(tmpdir(), "voussoir-cli-"));
+    try {
+      const { code, output } = runCli(["doctor"], cwd);
+      expect(code).toBe(0);
+      expect(output).toContain("note project");
+      expect(output).not.toContain("FAIL project");
+      expect(output).toContain("voussoir init");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
 function readNames(cwd: string): string[] {
   try {
     return [...new Bun.Glob("*").scanSync({ cwd, onlyFiles: false })];
