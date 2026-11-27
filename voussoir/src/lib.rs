@@ -82,6 +82,9 @@ pub mod updater;
 /// Patch application for the updater; the generator lives in the CLI.
 #[cfg(feature = "updater")]
 pub mod delta;
+/// Undoing an update whose build never reaches its first window.
+#[cfg(all(feature = "updater", not(any(target_os = "android", target_os = "ios"))))]
+pub mod rollback;
 
 pub use app::platform_name;
 pub use app::App;

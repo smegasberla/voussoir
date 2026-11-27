@@ -355,11 +355,14 @@ struct Release {
     sha256: String,
     /// Base64 Ed25519 signature over the artifact bytes.
     signature: Option<String>,
-    /// A patch from one older version to this one, when the feed offers one for
-    /// this platform. Patch bytes are themselves checked before use, and the
-    /// reconstructed binary is checked against `sha256`/`signature` exactly as a
-    /// full download would be.
-    patch: Option<Patch>,
+    /// Patches from older versions to this one, oldest first.
+    ///
+    /// A publisher may offer several: the updater picks the one whose `from`
+    /// matches the running version, so a user who skipped releases still only
+    /// downloads the delta. Patch bytes are themselves checked before use, and
+    /// the reconstructed binary is checked against `sha256`/`signature` exactly
+    /// as a full download would be.
+    patches: Vec<Patch>,
     notes: Value,
 }
 
@@ -472,17 +475,30 @@ fn parse_manifest(body: &str) -> Result<Release, Error> {
         .and_then(Value::as_str)
         .map(|signature| signature.trim().to_owned());
 
-    let patch = match value.get("patches") {
+    let patches = match value.get("patches") {
         Some(Value::Object(map)) => match map.get(platform_key()) {
-            Some(entry) => Some(parse_patch(entry)?),
-            None => None,
+            // A list is the current shape. A single object is what an older
+            // publisher wrote, and reading it keeps those feeds updating instead
+            // of failing with "`patches` must be an object keyed by platform".
+            Some(Value::Array(entries)) => entries
+                .iter()
+                .map(parse_patch)
+                .collect::<Result<Vec<_>, _>>()?,
+            Some(entry @ Value::Object(_)) => vec![parse_patch(entry)?],
+            Some(_) => {
+                return Err(Error::Handler(format!(
+                    "update `patches` for `{}` must be a list of patches",
+                    platform_key()
+                )))
+            }
+            None => Vec::new(),
         },
         Some(_) => {
             return Err(Error::Handler(
                 "update endpoint `patches` must be an object keyed by platform".to_owned(),
             ))
         }
-        None => None,
+        None => Vec::new(),
     };
 
     Ok(Release {
@@ -490,8 +506,60 @@ fn parse_manifest(body: &str) -> Result<Release, Error> {
         url,
         sha256,
         signature,
-        patch,
+        patches,
         notes,
+    })
+}
+
+/// A manifest as `parse_manifest` understood it, for the contract test.
+///
+/// The CLI generates feeds and this crate consumes them, and neither can see the
+/// other's tests: a format change on one side passed both suites while the
+/// shipped pair was broken. `tests/updater_contract.rs` parses a fixture written
+/// by `scripts/make-updater-fixture.ts` and applies its patches, so a drift in
+/// the shape fails here instead of in a user's update.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct ParsedManifest {
+    pub version: String,
+    pub url: String,
+    pub sha256: String,
+    pub signature: Option<String>,
+    /// Oldest first, as the feed listed them.
+    pub patches: Vec<ParsedPatch>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct ParsedPatch {
+    pub from: String,
+    pub url: String,
+    pub sha256: String,
+    pub signature: Option<String>,
+}
+
+/// Parse a feed exactly as `update.apply` does. See [`ParsedManifest`].
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[doc(hidden)]
+pub fn parse_manifest_for_contract(body: &str) -> Result<ParsedManifest, Error> {
+    let release = parse_manifest(body)?;
+    Ok(ParsedManifest {
+        version: release.version,
+        url: release.url,
+        sha256: release.sha256,
+        signature: release.signature,
+        patches: release
+            .patches
+            .into_iter()
+            .map(|patch| ParsedPatch {
+                from: patch.from,
+                url: patch.url,
+                sha256: patch.sha256,
+                signature: patch.signature,
+            })
+            .collect(),
     })
 }
 
@@ -858,6 +926,26 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+/// Install `bytes` and leave behind what a failed launch would need to undo it.
+///
+/// The old binary is copied aside *before* the rename, so the copy is the build
+/// that was running. The marker then names the version being installed, which is
+/// what `rollback::guard` counts launches against. A failure to keep the copy is
+/// not fatal: the update installs, it simply cannot be undone. The marker is
+/// written only when the copy exists, so no launch can loop on a restore that
+/// could never succeed.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn install_with_rollback(bytes: &[u8], target: &Path, version: &str) -> Result<(), Error> {
+    let kept = crate::rollback::keep_previous(target).is_ok();
+    install_bytes(bytes, target)?;
+    if kept {
+        if let Err(error) = crate::rollback::record_pending(target, version) {
+            eprintln!("voussoir: could not record the pending update: {error}");
+        }
+    }
+    Ok(())
+}
+
 /// Replace `target` with `bytes` without ever leaving it half-written.
 ///
 /// The new file is written beside the old one and renamed into place, because a
@@ -980,33 +1068,33 @@ fn apply_to(
     // A patch is only useful from the exact version it was built against, and
     // only when the old binary is readable. Either way the reconstructed file
     // must equal what a full download would have produced.
-    if let Some(patch) = &release.patch {
-        if patch.from == update.current {
-            if let Ok(old) = std::fs::read(target) {
-                let bytes = download(&patch.url, on_progress)?;
-                verify_sha256(&bytes, &patch.sha256)?;
-                if let Some(patch_signature) = &patch.signature {
-                    verify_signature(&bytes, patch_signature, public_key)?;
-                }
-                let rebuilt = crate::delta::apply(&old, &bytes)?;
-                verify_sha256(&rebuilt, &release.sha256)?;
-                verify_signature(&rebuilt, signature, public_key)?;
-                install_bytes(&rebuilt, target)?;
-                return Ok(json!({
-                    "installed": true,
-                    "patched": true,
-                    "version": release.version,
-                    "path": target.display().to_string(),
-                    "notes": release.notes,
-                }));
+    // Oldest-first order means the first matching hop is the furthest back the
+    // publisher supports, which is the most a user can save.
+    if let Some(patch) = release.patches.iter().find(|hop| hop.from == update.current) {
+        if let Ok(old) = std::fs::read(target) {
+            let bytes = download(&patch.url, on_progress)?;
+            verify_sha256(&bytes, &patch.sha256)?;
+            if let Some(patch_signature) = &patch.signature {
+                verify_signature(&bytes, patch_signature, public_key)?;
             }
+            let rebuilt = crate::delta::apply(&old, &bytes)?;
+            verify_sha256(&rebuilt, &release.sha256)?;
+            verify_signature(&rebuilt, signature, public_key)?;
+            install_with_rollback(&rebuilt, target, &release.version)?;
+            return Ok(json!({
+                "installed": true,
+                "patched": true,
+                "version": release.version,
+                "path": target.display().to_string(),
+                "notes": release.notes,
+            }));
         }
     }
 
     let bytes = download(&release.url, on_progress)?;
     verify_sha256(&bytes, &release.sha256)?;
     verify_signature(&bytes, signature, public_key)?;
-    install_bytes(&bytes, target)?;
+    install_with_rollback(&bytes, target, &release.version)?;
     Ok(json!({
         "installed": true,
         "patched": false,
@@ -1066,6 +1154,20 @@ fn install_commands(registry: &mut Registry, update: UpdateConfig) {
         spawn_and_exit(path)?;
         Ok(json!({ "restarting": true }))
     });
+}
+
+/// Start `path` and leave, for the startup guard in `app.rs`.
+///
+/// Separate from `update.relaunch` because nothing was installed in this
+/// process: `path` is the build the installer kept, and this process is running
+/// the one that never reached a window.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) fn spawn_and_exit_for_rollback(path: PathBuf) {
+    if let Err(error) = spawn_and_exit(path) {
+        // Nothing else can be done here, and exiting would leave no app at all.
+        // The marker is already cleared, so the next launch starts normally.
+        eprintln!("voussoir: could not start the previous build: {error}");
+    }
 }
 
 /// The command that starts the freshly installed binary.

@@ -198,11 +198,16 @@ Options
   --artifact <path>  the built binary to publish
   --base-url <url>   where the artifacts are served, no trailing slash needed
   --platform <key>   linux-x86_64 and friends (default: this machine)
-  --previous <path>  the artifact of the version this one upgrades from
-  --from <ver>       that version's number; required with --previous
+  --previous <path>  the artifact of a version this one upgrades from; repeat it
+  --from <ver>       that version's number, paired by position with --previous
+  --merge            merge this platform into an existing manifest (for CI)
   --notes <text>     release notes stored in the manifest
   --key <path>       the Ed25519 private key (default: voussoir-signing-key.pem)
   --out <path>       where to write the manifest (default: latest.json)
+
+  Repeating --previous/--from offers a patch from every version still in the
+  wild, so a user who skipped releases still downloads a delta. --merge lets one
+  job per platform write its own entry into one latest.json.
 `,
   update: `voussoir update - rebuild this CLI from its checkout
 
@@ -286,7 +291,18 @@ const FLAGS: Record<string, string[]> = {
   keygen: ["out"],
   sign: ["key"],
   patch: ["from", "key", "out"],
-  release: ["version", "artifact", "base-url", "platform", "previous", "from", "notes", "key", "out"],
+  release: [
+    "version",
+    "artifact",
+    "base-url",
+    "platform",
+    "previous",
+    "from",
+    "merge",
+    "notes",
+    "key",
+    "out",
+  ],
   update: ["check", "feed", "out", "force"],
   "android build": ["abi", "release", "aab", "api"],
   "android run": ["api", "wait"],

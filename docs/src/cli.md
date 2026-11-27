@@ -307,14 +307,38 @@ with `--previous` a `patches` entry whose delta is written beside the manifest
 and advertised under the URL it will be served from. Nothing is uploaded: the
 manifest names where you say it will live, and serving the files is yours.
 
-The delta is the reason to use it. On a 94 MB binary, a one-constant change
-produced a 45-byte patch: the updater downloads 45 bytes instead of 94 MB, then
-verifies the reconstructed binary against the artifact's own hash and signature,
-so the patch cannot introduce anything the full download would not have. A
-patch that reconstructs the wrong bytes, carries a bad signature, or is
-malformed replaces nothing; generation is single-digit seconds and bounded in
-memory, because the index is a fixed 32 MB table rather than one entry per
-32-byte window.
+`--previous` and `--from` repeat, one pair per previous version, and every hop
+rebuilds *this* release from its own artifact. That is what lets someone three
+releases behind still download a delta instead of the whole binary:
+
+```sh
+voussoir release --version 2.1.0 --artifact dist/app \
+  --base-url https://downloads.example.com/app \
+  --previous dist/app-1.9.0 --from 1.9.0 \
+  --previous dist/app-2.0.0 --from 2.0.0 \
+  --key release.pem --out latest.json
+```
+
+`--merge` writes this platform's entries into an existing manifest instead of
+replacing it, so a CI matrix can build one `latest.json` from one job per
+platform. Merging a different `--version` is refused: two versions in one file
+would offer a user whichever artifact the last job wrote.
+
+The delta is the reason to use it, and the saving depends on how much changed.
+Measured on a 962 KB release build of `examples/hello`: changing one constant
+(21 bytes of the binary) produced a **62-byte** patch, and a build carrying real
+code changes produced a patch at about **45%** of the artifact, so even the bad
+case halves the download. The updater verifies the reconstructed binary against
+the artifact's own hash and signature, so a patch cannot introduce anything the
+full download would not have. A patch that reconstructs the wrong bytes, carries
+a bad signature, or is malformed replaces nothing. Generation takes well under a
+second and is bounded in memory, because the index is a fixed 32 MB table rather
+than one entry per 32-byte window.
+
+Signing and parsing are now checked against each other: `scripts/make-updater-fixture.ts`
+writes a manifest and patches with the CLI's own code, and
+`voussoir/tests/updater_contract.rs` parses them and applies every hop, so a
+format change on one side fails there instead of in a user's update.
 
 ## Theory: what the CLI will never do
 

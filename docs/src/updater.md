@@ -220,25 +220,34 @@ the `sha256` and `signature` it prints into the feed. The key is raw 32-byte
 Ed25519; the signature is over the artifact's exact bytes, not over the JSON, which
 removes canonicalization from the trust path.
 
-**Patch updates.** A feed may offer a delta from one older version:
+**Patch updates.** A feed may offer deltas from several older versions, oldest
+first:
 
 ```json
 "patches": {
-  "linux-x86_64": {
-    "from": "2.0.0",
-    "url": "https://example.com/2.0.0-to-2.1.0.patch",
-    "sha256": "...",
-    "signature": "..."
-  }
+  "linux-x86_64": [
+    { "from": "1.9.0", "url": "https://example.com/1.9.0-to-2.1.0.patch", "sha256": "...", "signature": "..." },
+    { "from": "2.0.0", "url": "https://example.com/2.0.0-to-2.1.0.patch", "sha256": "...", "signature": "..." }
+  ]
 }
 ```
 
-When the running `version` equals `from`, `update.apply` downloads the patch, checks
-it, applies it to the running binary, and then verifies the reconstructed file
-against the feed's `sha256` **and** `signature`, exactly as a full download would be.
-A patch that produces anything else is refused and the old binary stays. Build one
-with `voussoir patch old new --out app.patch --from 2.0.0 --key release.pem`; the
-format is copy-runs-and-inserts, documented in `voussoir/src/delta.rs`.
+When the running `version` matches one of the `from` values, `update.apply`
+downloads that patch, checks it, applies it to the running binary, and then verifies
+the reconstructed file against the feed's `sha256` **and** `signature`, exactly as a
+full download would be. A patch that produces anything else is refused and the old
+binary stays.
+
+Every entry rebuilds *this* release from its own version, so a user who skipped
+releases still downloads a delta rather than the whole artifact: someone on `1.9.0`
+reaches `2.1.0` through the first entry without visiting `2.0.0`. The list is
+ordered oldest first, and the first match wins, which is the furthest back the
+publisher supports. A single object instead of a list is still read, so a feed
+written before this shape keeps working.
+
+`voussoir release` writes this per platform and signs every hop. `voussoir patch`
+builds one delta by hand when you are assembling a feed yourself. The format is
+copy-runs-and-inserts, documented in `voussoir/src/delta.rs`.
 
 **Progress.** While `update.apply` downloads it emits
 `voussoir.listen("update-progress", ({received, total}) => ...)`, at most every
@@ -249,6 +258,25 @@ On Unix the new file takes the old one's mode and is renamed over it, which a ru
 process allows. Windows refuses to replace a running executable but allows renaming
 it, so the old file steps aside as `<name>.old`, is restored if the follow-up rename
 fails, and is swept up by the next install.
+
+**Launch rollback.** Renaming safely protects the install, not the launch. A build
+that is the wrong architecture, misses a library, or panics before its first window
+replaces a working app with a broken one, and nothing at install time can tell.
+
+So an install leaves two files beside the binary: `<name>.voussoir-previous`, a copy
+of the build that was running, and `<name>.voussoir-pending`, naming the version just
+installed. The first launch of the new build increments that marker and proceeds. Once
+the first window exists the marker and the copy are deleted, which is the earliest
+proof the build is useful. If a second launch finds the marker still there, the new
+build never got that far: the previous copy is renamed back over it and started, and
+one line on stderr says which version was restored.
+
+Two launches, not one, because a launch can fail for reasons unrelated to the
+update: no display, a locked profile, a kill from the OS. Rolling back on the first
+failure would undo good updates. A crash the user hits later is a bug to fix, not a
+broken install to undo, which is why confirmation happens at the first window rather
+than after the event loop returns. When no copy could be kept, the marker is not
+written and the update simply cannot be undone.
 
 ## Android and iOS
 
@@ -266,8 +294,9 @@ silently failing.
 
 - **No key rotation.** One `update.public_key` per config; switching keys means
   shipping a build with the new one.
-- **No automatic rollback.** A failed check or install leaves the old binary in
-  place, but a build that starts and then crashes is the app's problem to detect.
+- **No rollback after the first window.** Launch rollback covers a build that never
+  gets that far; a build that starts and then misbehaves is a bug to fix, not an
+  install to undo.
 - **No background updates.** `update.apply` runs when the page asks; nothing checks
   on a timer, because that decision belongs to the app's UX and its store policy.
 

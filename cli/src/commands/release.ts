@@ -15,7 +15,7 @@
 import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { stringFlag, type Args } from "../args.ts";
+import { boolFlag, listFlag, stringFlag, type Args } from "../args.ts";
 import { fail } from "../proc.ts";
 import { applyPatch, createPatch } from "../delta.ts";
 import { artifactFragment } from "./keys.ts";
@@ -32,7 +32,13 @@ export interface ManifestEntry extends SignedEntry {
   url: string;
 }
 
-/** A delta from one older version, in the shape the shell's updater parses. */
+/**
+ * One hop of a delta chain, in the shape the shell's updater parses.
+ *
+ * `from` names the version this hop upgrades. A platform lists its hops oldest
+ * first, so a user on 1.0.0 can reach 1.3.0 through 1.0->1.1, 1.1->1.2 and
+ * 1.2->1.3 rather than downloading the full artifact.
+ */
 export interface ManifestPatch extends SignedEntry {
   from: string;
   url: string;
@@ -42,7 +48,7 @@ export interface Manifest {
   version: string;
   notes?: unknown;
   downloads: Record<string, ManifestEntry>;
-  patches?: Record<string, ManifestPatch>;
+  patches?: Record<string, ManifestPatch[]>;
 }
 
 /** Rebuild an Ed25519 public key from the raw 32 bytes `keygen` prints. */
@@ -113,6 +119,59 @@ export function applyVerified(
   return next;
 }
 
+/** Compare two `x.y.z` strings numerically, prerelease suffixes compared as text. */
+export function compareVersions(a: string, b: string): number {
+  const split = (v: string) => v.split(/[.+-]/).filter((part) => part.length > 0);
+  const left = split(a);
+  const right = split(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const x = left[i];
+    const y = right[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const nx = Number(x);
+    const ny = Number(y);
+    // Numeric parts compare as numbers so 1.10.0 is newer than 1.9.0; anything
+    // else (a `-beta.1` suffix) compares as text, which is stable if not strict.
+    const bothNumeric = Number.isFinite(nx) && Number.isFinite(ny);
+    const order = bothNumeric ? nx - ny : x < y ? -1 : x > y ? 1 : 0;
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+/** Oldest first, so a chain's first entry is the furthest back it can reach. */
+function sortedByVersion<T extends { version: string }>(entries: T[]): T[] {
+  return [...entries].sort((a, b) => compareVersions(a.version, b.version));
+}
+
+/**
+ * Fold one platform's entry into an existing manifest.
+ *
+ * CI builds each platform on its own machine, so N jobs each produce a manifest
+ * with one `downloads` key. Merging keeps the version fixed: two different
+ * versions in one file would let a user on 1.2.0 be offered a 1.1.0 artifact by
+ * whichever platform happened to be written last.
+ */
+export function mergeManifests(existing: Manifest, next: Manifest, platform: string): Manifest {
+  if (existing.version !== next.version) {
+    throw new Error(
+      `refusing to merge ${next.version} into a manifest for ${existing.version}; ` +
+        `delete the old manifest or pass the same --version`,
+    );
+  }
+  const downloads = { ...existing.downloads, ...next.downloads };
+  const patches: Record<string, ManifestPatch[]> = { ...(existing.patches ?? {}) };
+  for (const [key, hops] of Object.entries(next.patches ?? {})) patches[key] = hops;
+  const notes = existing.notes ?? next.notes;
+  return {
+    version: existing.version,
+    ...(notes === undefined ? {} : { notes }),
+    downloads,
+    ...(Object.keys(patches).length === 0 ? {} : { patches }),
+  };
+}
+
 /** Build the manifest for one platform, given the bytes and their URLs. */
 export function manifestFor(input: {
   version: string;
@@ -121,8 +180,8 @@ export function manifestFor(input: {
   artifactUrl: string;
   privateKey: string | Buffer;
   notes?: unknown;
-  previous?: { version: string; bytes: Uint8Array; patchUrl: string };
-}): { manifest: Manifest; patch?: Buffer } {
+  previous?: { version: string; bytes: Uint8Array; patchUrl: string }[];
+}): { manifest: Manifest; patches: { name: string; bytes: Buffer }[] } {
   const full = artifactFragment(input.artifact, input.privateKey);
   const manifest: Manifest = {
     version: input.version,
@@ -132,20 +191,25 @@ export function manifestFor(input: {
     },
   };
 
-  if (input.previous) {
-    const patch = createPatch(input.previous.bytes, input.artifact);
-    const signed = artifactFragment(patch, input.privateKey);
-    manifest.patches = {
-      [input.platform]: {
-        from: input.previous.version,
-        url: input.previous.patchUrl,
-        sha256: signed.sha256,
-        signature: signed.signature,
-      },
-    };
-    return { manifest, patch };
+  const patches: { name: string; bytes: Buffer }[] = [];
+  const hops: ManifestPatch[] = [];
+  // Every previous artifact gets a patch that rebuilds *this* release from it, so
+  // someone on 1.0.0 patches straight to 1.3.0 instead of downloading the full
+  // artifact just because they skipped 1.1 and 1.2. The list is ordered oldest
+  // first so the first match the updater finds is the furthest back it can go.
+  for (const step of sortedByVersion(input.previous ?? [])) {
+    const bytes = createPatch(step.bytes, input.artifact);
+    const signed = artifactFragment(bytes, input.privateKey);
+    hops.push({
+      from: step.version,
+      url: step.patchUrl,
+      sha256: signed.sha256,
+      signature: signed.signature,
+    });
+    patches.push({ name: step.patchUrl.split("/").pop()!, bytes });
   }
-  return { manifest };
+  if (hops.length > 0) manifest.patches = { [input.platform]: hops };
+  return { manifest, patches };
 }
 
 export function release(args: Args): number {
@@ -179,22 +243,24 @@ export function release(args: Args): number {
   const name = basename(artifactPath);
   const base = baseUrl.replace(/\/+$/, "");
 
-  let previous: { version: string; bytes: Uint8Array; patchUrl: string } | undefined;
-  const previousPath = stringFlag(args, "previous");
-  if (previousPath) {
-    const previousVersion = stringFlag(args, "from");
-    if (!previousVersion) {
-      fail("--previous needs --from <x.y.z> so the patch says what it upgrades");
-    }
-    if (!existsSync(previousPath)) fail(`no previous artifact at ${previousPath}`);
-    previous = {
+  // `--previous` and `--from` are repeatable and paired by position, so one
+  // invocation can offer a direct patch from every version still in the wild.
+  const previousPaths = listFlag(args, "previous");
+  const fromVersions = listFlag(args, "from");
+  if (previousPaths.length !== fromVersions.length) {
+    fail("--previous and --from must be repeated together, one pair per previous version");
+  }
+  const previous = previousPaths.map((path, index) => {
+    const previousVersion = fromVersions[index]!;
+    if (!existsSync(path)) fail(`no previous artifact at ${path}`);
+    return {
       version: previousVersion,
-      bytes: readFileSync(previousPath),
+      bytes: readFileSync(path),
       patchUrl: `${base}/${platform}-${previousVersion}-to-${version}.vsd`,
     };
-  }
+  });
 
-  const { manifest, patch } = manifestFor({
+  const { manifest, patches } = manifestFor({
     version,
     platform,
     artifact,
@@ -204,23 +270,32 @@ export function release(args: Args): number {
     previous,
   });
 
-  // The delta lands beside the manifest so the two travel together; its URL is
-  // derived from the same base the artifacts use.
-  if (previous && patch) {
-    const patchName = `${platform}-${previous.version}-to-${version}.vsd`;
-    writeFileSync(join(dirname(out), patchName), patch);
-    console.log(`  wrote ${patchName} (${patch.length} bytes)`);
+  // Each delta lands beside the manifest so the two travel together; their URLs
+  // are derived from the same base the artifacts use.
+  for (const { name: patchName, bytes } of patches) {
+    writeFileSync(join(dirname(out), patchName), bytes);
+    console.log(`  wrote ${patchName} (${bytes.length} bytes)`);
   }
 
-  writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`);
+  // `--merge` is for CI: each platform's job writes its own entry into the one
+  // manifest, so a single feed serves every download.
+  let final = manifest;
+  if (boolFlag(args, "merge") && existsSync(out)) {
+    try {
+      const existing = JSON.parse(readFileSync(out, "utf8")) as Manifest;
+      final = mergeManifests(existing, manifest, platform);
+    } catch (error) {
+      fail(`cannot merge into ${out}: ${(error as Error).message}`);
+    }
+  }
 
-  const saved = (size: number) => {
-    if (!previous || !patch) return "";
-    const ratio = Math.round((1 - patch.length / size) * 100);
-    return `, ${ratio}% smaller than the full artifact`;
-  };
-  const size = artifact.length;
-  console.log(`  wrote ${out} for ${platform} ${version} (${size} bytes${saved(size)})`);
+  writeFileSync(out, `${JSON.stringify(final, null, 2)}\n`);
+
+  const saved = patches.length > 0 ? `, ${patches.length} delta(s)` : "";
+  console.log(`  wrote ${out} for ${platform} ${version} (${artifact.length} bytes${saved})`);
+  if (Object.keys(final.downloads).length > 1) {
+    console.log(`  the manifest now offers ${Object.keys(final.downloads).join(", ")}`);
+  }
   console.log(`  update.public_key must be "${artifactFragment(artifact, key).publicKey}"`);
   return 0;
 }

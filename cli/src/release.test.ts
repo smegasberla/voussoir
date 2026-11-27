@@ -7,7 +7,9 @@ import { parseArgs } from "./args.ts";
 import { applyPatch, createPatch } from "./delta.ts";
 import {
   applyVerified,
+  compareVersions,
   manifestFor,
+  mergeManifests,
   release,
   sha256Hex,
   verifyArtifact,
@@ -62,21 +64,22 @@ describe("release manifest", () => {
   test("with --previous it adds a patch that rebuilds the new artifact", () => {
     const { pem } = keyPair();
     const { old, next } = artifacts();
-    const { manifest, patch } = manifestFor({
+    const { manifest, patches } = manifestFor({
       version: "1.2.0",
       platform: "linux-x86_64",
       artifact: next,
       artifactUrl: "https://example.invalid/app-1.2.0",
       privateKey: pem,
-      previous: {
+      previous: [{
         version: "1.1.0",
         bytes: old,
         patchUrl: "https://example.invalid/linux-x86_64-1.1.0-to-1.2.0.vsd",
-      },
+      }],
     });
 
-    expect(patch).toBeDefined();
-    const entry = manifest.patches!["linux-x86_64"]!;
+    expect(patches.length).toBe(1);
+    const patch = patches[0]!.bytes;
+    const entry = manifest.patches!["linux-x86_64"]![0]!;
     expect(entry.from).toBe("1.1.0");
     expect(entry.url).toBe("https://example.invalid/linux-x86_64-1.1.0-to-1.2.0.vsd");
     // The patch entry must describe the patch, not the artifact.
@@ -89,16 +92,16 @@ describe("release manifest", () => {
   test("a delta is much smaller than the artifact it replaces", () => {
     const { pem } = keyPair();
     const { old, next } = artifacts();
-    const { patch } = manifestFor({
+    const { patches } = manifestFor({
       version: "1.2.0",
       platform: "linux-x86_64",
       artifact: next,
       artifactUrl: "https://example.invalid/app",
       privateKey: pem,
-      previous: { version: "1.1.0", bytes: old, patchUrl: "https://example.invalid/p.vsd" },
+      previous: [{ version: "1.1.0", bytes: old, patchUrl: "https://example.invalid/p.vsd" }],
     });
     // The claim the feature rests on: a small change costs a small download.
-    expect(patch!.length).toBeLessThan(next.length / 2);
+    expect(patches[0]!.bytes.length).toBeLessThan(next.length / 2);
   });
 
   test("no --previous means no patches key, not an empty one", () => {
@@ -171,13 +174,13 @@ describe("installing a delta over an installed binary", () => {
   test("replaces the binary with the bytes the feed signed", () => {
     const { pem, raw } = keyPair();
     const { old, next } = artifacts();
-    const { manifest, patch } = manifestFor({
+    const { manifest, patches } = manifestFor({
       version: "1.2.0",
       platform: "linux-x86_64",
       artifact: next,
       artifactUrl: "https://example.invalid/app",
       privateKey: pem,
-      previous: { version: "1.1.0", bytes: old, patchUrl: "https://example.invalid/p.vsd" },
+      previous: [{ version: "1.1.0", bytes: old, patchUrl: "https://example.invalid/p.vsd" }],
     });
 
     const dir = tempDir();
@@ -186,7 +189,7 @@ describe("installing a delta over an installed binary", () => {
       const installed = join(dir, "app");
       writeFileSync(installed, old);
 
-      applyVerified(installed, patch!, manifest.downloads["linux-x86_64"]!, raw);
+      applyVerified(installed, patches[0]!.bytes, manifest.downloads["linux-x86_64"]!, raw);
       expect(new Uint8Array(readFileSync(installed))).toEqual(new Uint8Array(next));
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -321,14 +324,14 @@ describe("release command", () => {
       const entry = manifest.downloads["linux-x86_64"];
       // The base URL's trailing slash is normalised, not doubled.
       expect(entry.url).toBe("https://example.invalid/releases/app-1.2.0");
-      expect(manifest.patches["linux-x86_64"].url).toBe(
+      expect(manifest.patches["linux-x86_64"][0].url).toBe(
         "https://example.invalid/releases/linux-x86_64-1.1.0-to-1.2.0.vsd",
       );
 
       // The file the manifest points at must exist, and be the patch it names.
-      const patchName = manifest.patches["linux-x86_64"].url.split("/").pop();
+      const patchName = manifest.patches["linux-x86_64"][0].url.split("/").pop();
       const written = readFileSync(join(dir, patchName!));
-      expect(sha256Hex(written)).toBe(manifest.patches["linux-x86_64"].sha256);
+      expect(sha256Hex(written)).toBe(manifest.patches["linux-x86_64"][0].sha256);
       expect(applyPatch(old, written)).toEqual(next);
       expect(() => verifyArtifact(next, entry, raw)).not.toThrow();
     } finally {
@@ -394,5 +397,74 @@ describe("release command", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("patch chains", () => {
+  test("one patch is offered from every version still in the wild", () => {
+    const { pem } = keyPair();
+    const { old, next } = artifacts();
+    const oldest = Buffer.concat([Buffer.from("very old build"), old.subarray(14)]);
+
+    const { manifest, patches } = manifestFor({
+      version: "2.0.0",
+      platform: "linux-x86_64",
+      artifact: next,
+      artifactUrl: "https://example.invalid/app-2.0.0",
+      privateKey: pem,
+      previous: [
+        { version: "1.9.0", bytes: old, patchUrl: "https://example.invalid/a.vsd" },
+        { version: "1.0.0", bytes: oldest, patchUrl: "https://example.invalid/b.vsd" },
+      ],
+    });
+
+    const hops = manifest.patches!["linux-x86_64"]!;
+    // Oldest first, so the first hop the updater matches is the furthest back it
+    // can go: someone three versions behind does not download the full artifact.
+    expect(hops.map((hop) => hop.from)).toEqual(["1.0.0", "1.9.0"]);
+    // Each hop rebuilds this release from its own source, not from the next one.
+    for (const hop of hops) {
+      const source = hop.from === "1.0.0" ? oldest : old;
+      const patch = patches.find((entry) => hop.url.endsWith(entry.name))!.bytes;
+      expect(applyPatch(source, patch)).toEqual(next);
+    }
+  });
+
+  test("versions sort numerically, so 1.10 comes after 1.9", () => {
+    expect(compareVersions("1.10.0", "1.9.0")).toBeGreaterThan(0);
+    expect(compareVersions("1.9.0", "1.10.0")).toBeLessThan(0);
+    expect(compareVersions("1.0.0", "1.0.0")).toBe(0);
+  });
+});
+
+describe("merging per-platform manifests", () => {
+  const built = (platform: string, version: string, key: Buffer) => {
+    const { next } = artifacts();
+    return manifestFor({
+      version,
+      platform,
+      artifact: next,
+      artifactUrl: `https://example.invalid/${platform}`,
+      privateKey: key,
+    }).manifest;
+  };
+
+  test("two CI jobs produce one feed serving both downloads", () => {
+    const { pem } = keyPair();
+    const linux = built("linux-x86_64", "1.2.0", pem);
+    const windows = built("windows-x86_64", "1.2.0", pem);
+
+    const merged = mergeManifests(linux, windows, "windows-x86_64");
+    expect(Object.keys(merged.downloads).sort()).toEqual(["linux-x86_64", "windows-x86_64"]);
+    expect(merged.version).toBe("1.2.0");
+  });
+
+  test("merging a different version is refused", () => {
+    // Two versions in one file would offer a user whichever artifact the last
+    // job wrote, which is how an update silently downgrades.
+    const { pem } = keyPair();
+    expect(() =>
+      mergeManifests(built("linux-x86_64", "1.2.0", pem), built("windows-x86_64", "1.1.0", pem), "windows-x86_64"),
+    ).toThrow(/refusing to merge 1\.1\.0 into a manifest for 1\.2\.0/);
   });
 });

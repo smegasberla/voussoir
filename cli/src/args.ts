@@ -4,6 +4,14 @@ export type Args = {
   command: string;
   positionals: string[];
   flags: Record<string, string | true>;
+  /**
+   * Every value a repeatable flag was given, in order.
+   *
+   * `flags` keeps only the last one, which is the right default (a second
+   * `--out` should win) but loses information for `--previous`, where each
+   * repetition is a different previous artifact to patch from.
+   */
+  repeated?: Record<string, string[]>;
   help: boolean;
 };
 
@@ -12,7 +20,13 @@ export function parseArgs(argv: string[]): Args {
   const [command = "help", ...rest] = leadingFlags ? ["help", ...argv] : argv;
   const positionals: string[] = [];
   const flags: Record<string, string | true> = {};
+  const repeated: Record<string, string[]> = {};
   let help = false;
+
+  const record = (key: string, value: string) => {
+    flags[key] = value;
+    (repeated[key] ??= []).push(value);
+  };
 
   for (let i = 0; i < rest.length; i++) {
     const token = rest[i]!;
@@ -22,11 +36,11 @@ export function parseArgs(argv: string[]): Args {
       const [rawKey, inline] = token.slice(2).split("=", 2);
       const key = rawKey ?? "";
       if (inline !== undefined) {
-        flags[key] = inline;
+        record(key, inline);
       } else {
         const next = rest[i + 1];
         if (next !== undefined && !next.startsWith("-")) {
-          flags[key] = next;
+          record(key, next);
           i++;
         } else {
           flags[key] = true;
@@ -37,12 +51,17 @@ export function parseArgs(argv: string[]): Args {
     }
   }
 
-  return { command, positionals, flags, help };
+  return { command, positionals, flags, repeated, help };
 }
 
 export function stringFlag(args: Args, name: string): string | undefined {
   const value = args.flags[name];
   return typeof value === "string" ? value : undefined;
+}
+
+/** Every value given to a repeatable flag, in order; a single flag still lists one. */
+export function listFlag(args: Args, name: string): string[] {
+  return args.repeated?.[name] ?? [];
 }
 
 export function boolFlag(args: Args, name: string): boolean {

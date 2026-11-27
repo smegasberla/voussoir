@@ -113,6 +113,20 @@ export function createPatch(old: Uint8Array, next: Uint8Array): Buffer {
         if (offsets[at] === -1) break;
         if (hashes[at] !== h) continue;
         const offset = offsets[at]!;
+        // The hash only narrows the candidates: a 32-bit digest collides, and a
+        // false match copied the wrong block while the tail happened to agree
+        // (found on a real 896 KB release pair). The block itself must match
+        // before it can be copied. It always fits, since only offsets with a
+        // full block were indexed.
+        let same = true;
+        for (let k = 0; k < BLOCK; k++) {
+          if (oldBuf[offset + k] !== nextBuf[i + k]) {
+            same = false;
+            break;
+          }
+        }
+        if (!same) continue;
+
         let length = BLOCK;
         while (
           offset + length < oldLen &&
