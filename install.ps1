@@ -139,6 +139,18 @@ $share = Join-Path $env:LOCALAPPDATA "voussoir"
 New-Item -ItemType Directory -Force -Path $share | Out-Null
 Set-Content -Path (Join-Path $share "source") -Value $src -NoNewline
 Write-Host "voussoir-install: recorded the source checkout in $share\source"
+
+# Record the commit too. `update` compares it against the checkout's HEAD and
+# only rebuilds when `cli\` changed, so an install with no stamp always looks
+# stale; this is what makes "already current" true on Windows.
+$commit = git -C $src rev-parse HEAD 2>$null
+if ($LASTEXITCODE -eq 0 -and $commit) {
+  Set-Content -Path (Join-Path $share "built") -Value $commit -NoNewline
+  Write-Host "voussoir-install: recorded the built commit in $share\built"
+} else {
+  Remove-Item (Join-Path $share "built") -ErrorAction SilentlyContinue
+  Write-Warning "no git commit recorded; the next update will rebuild once"
+}
 Write-Host "voussoir-install: installed $(Join-Path $binDir 'voussoir.exe')"
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

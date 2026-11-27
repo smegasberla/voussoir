@@ -185,10 +185,15 @@ Options
 Usage
   voussoir update
 
+  Rebuilds only when cli/ changed since the commit the installed binary was
+  built from, so committing docs or .gitignore does not recompile it. This
+  rebuilds the CLI, never the app: an app links the framework crate itself and
+  picks up framework changes on its own next build.
+
 Options
   --check          report what is newer without changing anything
   --feed <url>     read a prebuilt-binary feed instead of rebuilding
-                   from the install.sh checkout (or VOUSSOIR_CLI_FEED)
+                   from the installer's checkout (or VOUSSOIR_CLI_FEED)
   --out <path>     write the binary here instead of replacing the CLI
   --force          rebuild or install even when already current
 `,

@@ -220,6 +220,24 @@ function isCheckout(dir: string): boolean {
 }
 
 /**
+ * The directory the installers record the checkout and built commit in.
+ *
+ * `install.ps1` uses `%LOCALAPPDATA%\voussoir`, the shell scripts use
+ * `~/.local/share/voussoir`. Resolving it in one place keeps `update` from
+ * looking in a directory its own installer never wrote, which on Windows meant
+ * every install read as stale and every `update` failed to find a checkout.
+ */
+export function shareDir(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: string = process.platform,
+  home: string = homedir(),
+): string {
+  if (env.XDG_DATA_HOME) return env.XDG_DATA_HOME;
+  if (platform === "win32" && env.LOCALAPPDATA) return env.LOCALAPPDATA;
+  return join(home, ".local", "share");
+}
+
+/**
  * Where `install.sh` keeps the checkout it builds the CLI from.
  *
  * Three answers, in order of how directly they say it: the environment, the
@@ -230,7 +248,7 @@ function isCheckout(dir: string): boolean {
  */
 export function sourceDir(): string {
   if (process.env.VOUSSOIR_SRC) return process.env.VOUSSOIR_SRC;
-  const share = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+  const share = shareDir();
 
   const pointer = join(share, "voussoir", "source");
   if (existsSync(pointer)) {
@@ -268,8 +286,7 @@ export async function update(args: Args): Promise<number> {
  * halves of the same question: which checkout, and which commit of it.
  */
 export function stampPath(): string {
-  const share = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
-  return join(share, "voussoir", "built");
+  return join(shareDir(), "voussoir", "built");
 }
 
 /** The commit recorded for this install, or `undefined` when there is none. */

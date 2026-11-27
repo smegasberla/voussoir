@@ -94,6 +94,11 @@ jobs:
         run: |
           sh -n install.sh
           sh install.sh --no-deps --prefix "$RUNNER_TEMP/voussoir-prefix"
+          # `update` decides freshness from this file. If the installer stops
+          # writing it, every install silently reads as stale and rebuilds on
+          # every commit, which is the bug the stamp exists to prevent.
+          test -s "$HOME/.local/share/voussoir/built"
+          "$RUNNER_TEMP/voussoir-prefix/bin/voussoir" update --check
 
       - name: Install Xvfb and appimagetool
         run: |
@@ -143,7 +148,14 @@ jobs:
         run: cargo build -p voussoir --examples
 
       - name: Install script (checkout build)
-        run: ./install.ps1 -NoDeps -Prefix "$env:RUNNER_TEMP\voussoir-prefix"
+        run: |
+          ./install.ps1 -NoDeps -Prefix "$env:RUNNER_TEMP\voussoir-prefix"
+          # Same assertion as Linux: the stamp must land where `update` looks,
+          # which is %LOCALAPPDATA%, not ~/.local/share.
+          $built = Join-Path $env:LOCALAPPDATA "voussoir\built"
+          if (-not (Test-Path $built)) { throw "install.ps1 wrote no build stamp" }
+          if ((Get-Item $built).Length -eq 0) { throw "build stamp is empty" }
+          & "$env:RUNNER_TEMP\voussoir-prefix\bin\voussoir.exe" update --check
 
       # The security guarantees — panic containment, remote-script blocking,
       # navigation lockdown — are per-webview-engine facts, and Windows ships
@@ -350,7 +362,10 @@ jobs:
         run: cargo build -p voussoir --examples
 
       - name: Install script (checkout build)
-        run: sh install.sh --no-deps --prefix "$RUNNER_TEMP/voussoir-prefix"
+        run: |
+          sh install.sh --no-deps --prefix "$RUNNER_TEMP/voussoir-prefix"
+          test -s "$HOME/.local/share/voussoir/built"
+          "$RUNNER_TEMP/voussoir-prefix/bin/voussoir" update --check
 
       # Same harness as Linux and Windows: WKWebView honours custom-protocol
       # headers and the navigation veto differently from WebKitGTK, so the

@@ -313,9 +313,11 @@ These are decisions, not gaps waiting to be filled:
 - **No global state.** Every command reads and writes the project directory and the
   standard toolchain locations, nothing else. Two projects never interfere, and a
   CI cache is the only thing that survives a clean checkout. The one exception is
-  `update`, which reads `~/.local/share/voussoir/source` to find the checkout it was
-  installed from, and `~/.local/share/voussoir/built` for the commit it was built
-  from, both written by `install.sh`.
+  `update`, which reads `source` and `built` from the installer's share directory
+  (`~/.local/share/voussoir` on Unix, `%LOCALAPPDATA%\voussoir` on Windows, and
+  `$XDG_DATA_HOME/voussoir` when that is set). The first names the checkout it was
+  installed from; the second the commit it was built from, which is what lets a
+  docs-only commit skip the rebuild.
 
 ## What it does not do
 

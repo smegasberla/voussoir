@@ -22,6 +22,7 @@ import {
   platformKey,
   buildIsFresh,
   builtCommit,
+  shareDir,
   readChecksum,
   recordBuilt,
   sourceDir,
@@ -527,5 +528,26 @@ describe("Direction against origin", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Install share directory", () => {
+  test("Windows resolves where install.ps1 writes, not ~/.local/share", () => {
+    // install.ps1 writes to %LOCALAPPDATA%\voussoir. Looking in ~/.local/share
+    // instead made the source pointer and the build stamp invisible there, so
+    // every Windows install read as stale and `update` found no checkout.
+    expect(
+      shareDir({ LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" }, "win32", "C:\\Users\\me"),
+    ).toBe("C:\\Users\\me\\AppData\\Local");
+  });
+
+  test("XDG_DATA_HOME wins everywhere, as install.sh assumes", () => {
+    expect(shareDir({ XDG_DATA_HOME: "/tmp/xdg", LOCALAPPDATA: "C:\\L" }, "win32", "/h")).toBe(
+      "/tmp/xdg",
+    );
+  });
+
+  test("falls back to ~/.local/share when nothing is set", () => {
+    expect(shareDir({}, "linux", "/home/me")).toBe("/home/me/.local/share");
   });
 });
