@@ -261,7 +261,10 @@ the server sends no `Content-Length`.
 On Unix the new file takes the old one's mode and is renamed over it, which a running
 process allows. Windows refuses to replace a running executable but allows renaming
 it, so the old file steps aside as `<name>.old`, is restored if the follow-up rename
-fails, and is swept up by the next install.
+fails, and is swept up by the next install. That strategy is an ordinary function
+rather than something inside a `cfg(windows)` block, so the suite exercises it on
+every platform: the branch that only runs on Windows would otherwise be reviewed
+and never run, and it is the path that can lose a working binary.
 
 **Launch and crash rollback.** Renaming safely protects the install, not the launch.
 A build that is the wrong architecture, misses a library, panics before its first

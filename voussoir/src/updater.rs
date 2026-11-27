@@ -995,13 +995,17 @@ fn install_platform(
         .map_err(|error| Error::Handler(format!("could not install the update: {error}")))
 }
 
-#[cfg(all(windows, not(any(target_os = "android", target_os = "ios"))))]
-fn install_platform(
-    temp: &Path,
-    target: &Path,
-    backup: &Path,
-    _parent: &Path,
-) -> Result<(), Error> {
+/// Install by renaming the old binary aside first, then the new one into place,
+/// and putting the old one back if that second rename fails.
+///
+/// Windows needs this because it refuses to replace a running executable while
+/// allowing one to be renamed. The logic is not Windows-specific, so it lives
+/// here instead of inside a `cfg(windows)` function: the branch that only runs on
+/// Windows could never be exercised on the machines the tests run on, and an
+/// untested rollback path is the one that loses a user's working binary. The
+/// Windows `install_platform` is now a call into this.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn install_by_renaming_aside(temp: &Path, target: &Path, backup: &Path) -> Result<(), Error> {
     let stepped_aside = std::fs::rename(target, backup).is_ok();
     if let Err(error) = std::fs::rename(temp, target) {
         if stepped_aside {
@@ -1015,6 +1019,16 @@ fn install_platform(
     // may stay locked until exit; a leftover is swept on the next install.
     let _ = std::fs::remove_file(backup);
     Ok(())
+}
+
+#[cfg(all(windows, not(any(target_os = "android", target_os = "ios"))))]
+fn install_platform(
+    temp: &Path,
+    target: &Path,
+    backup: &Path,
+    _parent: &Path,
+) -> Result<(), Error> {
+    install_by_renaming_aside(temp, target, backup)
 }
 
 #[cfg(not(any(unix, windows, target_os = "android", target_os = "ios")))]
@@ -1360,6 +1374,89 @@ mod install_tests {
         assert_eq!(result["installed"], true, "{result}");
         assert_eq!(result["version"], "9.9.9");
         assert_eq!(std::fs::read(&target).unwrap(), artifact);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_windows_install_strategy_replaces_the_binary_and_sweeps_the_backup() {
+        // Windows renames the running binary aside rather than replacing it. This
+        // runs that strategy on whatever platform the tests run on, because the
+        // branch guarded by `cfg(windows)` is never executed here and a rollback
+        // path that only exists in an untested branch is how a user loses a
+        // working binary.
+        let (dir, target) = temp_target("win-replace", b"old-binary");
+        let temp = sibling(&target, ".incoming");
+        let backup = sibling(&target, ".old");
+        std::fs::write(&temp, b"new-binary").unwrap();
+
+        install_by_renaming_aside(&temp, &target, &backup).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new-binary");
+        assert!(!temp.exists(), "the incoming file is renamed into place");
+        assert!(!backup.exists(), "the swept backup is gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_windows_install_strategy_restores_the_old_binary_when_the_rename_fails() {
+        // The failure this exists for: the old file stepped aside and the new one
+        // could not be moved in. Without the restore the target is simply gone.
+        let (dir, target) = temp_target("win-restore", b"old-binary");
+        let backup = sibling(&target, ".old");
+        // Nothing to rename into place, so the second rename fails.
+        let missing = sibling(&target, ".never-written");
+
+        let error = install_by_renaming_aside(&missing, &target, &backup).unwrap_err();
+
+        assert!(error.to_string().contains("could not install"), "{error}");
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"old-binary",
+            "the old binary must be back in place"
+        );
+        assert!(!backup.exists(), "the backup was renamed back, not left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn applying_leaves_what_a_failed_launch_would_need() {
+        // The whole install, through `apply_to`, must leave the state rollback
+        // reads: the build that was running, and a marker naming the new version.
+        // Testing the pieces separately proves composition, not the sequence.
+        let (signing, public) = test_key();
+        let artifact = b"new-binary-contents".to_vec();
+        let addr = serve_with(|addr| {
+            vec![
+                ("/feed".to_owned(), feed(&signing, addr, "9.9.9", &artifact)),
+                ("/app".to_owned(), artifact.clone()),
+            ]
+        });
+        let (dir, target) = temp_target("apply-rollback", b"old-binary");
+        apply_to(&update_for(addr, &public), &target, false, &mut |_, _| {}).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), artifact);
+        // The copy is the build that was running, taken before the rename.
+        assert_eq!(
+            std::fs::read(sibling(&target, ".voussoir-previous")).unwrap(),
+            b"old-binary"
+        );
+        let marker = std::fs::read_to_string(sibling(&target, ".voussoir-pending"))
+            .expect("the pending marker should exist after an install");
+        assert!(marker.contains("9.9.9"), "the marker names the new version: {marker:?}");
+
+        // First launch counts and proceeds; a second without confirmation, as a
+        // build that died would leave it, reverts to the copy.
+        assert_eq!(crate::rollback::guard(&target), crate::rollback::Startup::Continue);
+        assert_eq!(std::fs::read(&target).unwrap(), artifact);
+        assert!(matches!(
+            crate::rollback::guard(&target),
+            crate::rollback::Startup::RolledBack { .. }
+        ));
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"old-binary",
+            "the build that was running is back"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
