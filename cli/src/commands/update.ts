@@ -12,7 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { boolFlag, stringFlag, type Args } from "../args.ts";
@@ -262,27 +262,56 @@ export async function update(args: Args): Promise<number> {
 }
 
 /**
- * True when the installed binary is older than the commit `HEAD` points at.
+ * Where the commit the installed binary was built from is recorded.
  *
- * `update` gated on "is the checkout behind origin", which is the wrong
- * question when you install from the checkout you develop in: after a push,
- * HEAD and origin match, so it reported "current" and returned while the binary
- * on PATH predated the commit by days. The binary is what runs, so compare its
- * mtime against the commit time instead.
+ * Beside the `source` pointer `install.sh` writes, because the two answer
+ * halves of the same question: which checkout, and which commit of it.
  */
-export function binaryOlderThanHead(target: string, headSeconds: number): boolean {
-  if (!existsSync(target)) return false;
-  return statSync(target).mtimeMs / 1000 < headSeconds;
+export function stampPath(): string {
+  const share = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+  return join(share, "voussoir", "built");
+}
+
+/** The commit recorded for this install, or `undefined` when there is none. */
+export function builtCommit(stamp: string = stampPath()): string | undefined {
+  if (!existsSync(stamp)) return undefined;
+  const recorded = readFileSync(stamp, "utf8").trim();
+  return recorded === "" ? undefined : recorded;
+}
+
+/** Record `commit` as the one the installed binary was built from. */
+export function recordBuilt(commit: string, stamp: string = stampPath()): void {
+  mkdirSync(dirname(stamp), { recursive: true });
+  writeFileSync(stamp, `${commit}\n`);
 }
 
 /**
- * Rebuild the CLI from its checkout, the way `install.sh` installed it.
+ * True when a binary built from `recorded` is still current for `head`.
  *
- * A release feed would be the wrong shape for this project: there is no release
- * to read, and the CLI is built from source on every install, so "the newest
- * version" is whatever the checkout's remote has. Rebuilding and replacing the
- * running binary keeps both halves honest.
+ * An unknown stamp means an install made before the stamp existed, which is one
+ * rebuild away from knowing. A commit unreachable from this checkout (after a
+ * rebase) is treated the same way, because it cannot be diffed either.
  */
+export function buildIsFresh(
+  git: (argv: string[], allowFailure?: boolean) => string,
+  dir: string,
+  recorded: string | undefined,
+  head: string,
+): boolean {
+  if (recorded === undefined) return false;
+  if (recorded === head) return true;
+  // A commit this checkout does not have (after a rebase, or a stamp copied from
+  // another machine) cannot be diffed: `git diff` exits non-zero and prints
+  // nothing, which would otherwise read as "no changes since".
+  const known = Bun.spawnSync(["git", "-C", dir, "cat-file", "-e", `${recorded}^{commit}`], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (known.exitCode !== 0) return false;
+  const changed = git(["diff", "--name-only", `${recorded}..${head}`, "--", "cli"], true);
+  return changed === "";
+}
+
 async function updateFromSource(checkOnly: boolean, force: boolean): Promise<number> {
   const dir = sourceDir();
   if (!existsSync(join(dir, ".git"))) {
@@ -306,18 +335,21 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   const behind = before !== remote;
 
   // The checkout matching origin says nothing about the installed binary, which
-  // is the thing you actually run. A same-tree install is always "up to date"
-  // by the commit test, so catch a binary that predates HEAD as well.
+  // is the thing you actually run. Compare the commit it was built from against
+  // HEAD instead, and only over `cli/`: an mtime comparison forced a full
+  // rebuild for a commit that touched .gitignore, which is how this was found.
   const target = installTarget();
-  const headSeconds = Number(git(["log", "-1", "--format=%ct"]));
-  const stale = target !== undefined && binaryOlderThanHead(target, headSeconds);
+  const recorded = builtCommit();
+  const stale = target !== undefined && !buildIsFresh(git, dir, recorded, before);
 
   if (!behind && !stale && !force) {
     console.log(`  ${CLI_VERSION} is current (checkout at ${before.slice(0, 7)})`);
     return 0;
   }
   if (!behind && stale) {
-    console.log(`  installed binary is older than ${before.slice(0, 7)}; rebuilding`);
+    console.log(
+      `  installed binary was built from ${recorded?.slice(0, 7) ?? "an unknown commit"}; rebuilding`,
+    );
   }
   if (checkOnly) {
     // Printing "50334d7 -> 50334d7" when only the binary is stale reads as a
@@ -325,7 +357,7 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
     console.log(
       behind
         ? `  update available: ${before.slice(0, 7)} -> ${remote.slice(0, 7)} in ${dir}`
-        : `  update available: the installed binary predates ${before.slice(0, 7)}`,
+        : `  update available: the installed binary is behind ${before.slice(0, 7)}`,
     );
     return 0;
   }
@@ -359,6 +391,9 @@ async function updateFromSource(checkOnly: boolean, force: boolean): Promise<num
   } catch (error) {
     throw new Error(`cannot replace ${target}: ${(error as Error).message}`);
   }
+  // Only after the binary is in place: a stamp written before the copy would
+  // describe a build that never landed, and hide the next update.
+  recordBuilt(git(["rev-parse", "HEAD"]));
   console.log(`  rebuilt ${remote.slice(0, 7)} and replaced ${target}`);
   return 0;
 }

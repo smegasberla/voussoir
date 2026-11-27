@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -19,8 +20,12 @@ import {
   installBytes,
   installTarget,
   platformKey,
+  buildIsFresh,
+  builtCommit,
   readChecksum,
+  recordBuilt,
   sourceDir,
+  stampPath,
   update,
 } from "./commands/update.ts";
 import { parseArgs } from "./args.ts";
@@ -296,5 +301,116 @@ describe("Update install target", () => {
 
   test("replaces an installed voussoir binary", () => {
     expect(installTarget("/home/me/.local/bin/voussoir")).toBe("/home/me/.local/bin/voussoir");
+  });
+});
+
+describe("Build stamp", () => {
+  test("records the commit the installed binary came from", () => {
+    const dir = mkdtempSync(join(tmpdir(), "voussoir-stamp-"));
+    const stamp = join(dir, "built");
+    try {
+      expect(builtCommit(stamp)).toBeUndefined();
+      recordBuilt("abc1234", stamp);
+      expect(builtCommit(stamp)).toBe("abc1234");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an install with no stamp is treated as stale, not current", () => {
+    // Every install made before the stamp existed lands here. Reporting it
+    // "current" would be the original bug; one rebuild is the honest answer.
+    const dir = mkdtempSync(join(tmpdir(), "voussoir-stamp-"));
+    try {
+      expect(builtCommit(join(dir, "absent"))).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Freshness over cli/", () => {
+  /** A throwaway repo with one commit, so `git diff` has real history to read. */
+  function repo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "voussoir-fresh-"));
+    const run = (argv: string[]) => {
+      const out = Bun.spawnSync(["git", "-C", dir, ...argv], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (out.exitCode !== 0) throw new Error(out.stderr.toString());
+      return out.stdout.toString().trim();
+    };
+    run(["init", "-q"]);
+    run(["config", "user.email", "t@example.invalid"]);
+    run(["config", "user.name", "t"]);
+    run(["config", "commit.gpgsign", "false"]);
+    return dir;
+  }
+
+  const gitIn = (dir: string) => (argv: string[], allowFailure = false) => {
+    const out = Bun.spawnSync(["git", "-C", dir, ...argv], { stdout: "pipe", stderr: "pipe" });
+    if (out.exitCode !== 0 && !allowFailure) throw new Error(out.stderr.toString());
+    return out.stdout.toString().trim();
+  };
+
+  test("a commit that does not touch cli/ keeps the binary current", () => {
+    // The regression: comparing the binary's mtime to HEAD rebuilt the CLI for a
+    // .gitignore change, because every commit moves HEAD past any binary.
+    const dir = repo();
+    try {
+      writeFileSync(join(dir, ".gitignore"), "one\n");
+      const git = gitIn(dir);
+      git(["add", "."]);
+      git(["commit", "-qm", "one"]);
+      const first = git(["rev-parse", "HEAD"]);
+
+      writeFileSync(join(dir, ".gitignore"), "two\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "two"]);
+      const second = git(["rev-parse", "HEAD"]);
+
+      expect(buildIsFresh(git, dir, first, second)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a commit that touches cli/ makes the binary stale", () => {
+    const dir = repo();
+    try {
+      writeFileSync(join(dir, ".gitignore"), "x\n");
+      const git = gitIn(dir);
+      git(["add", "."]);
+      git(["commit", "-qm", "one"]);
+      const first = git(["rev-parse", "HEAD"]);
+
+      mkdirSync(join(dir, "cli"), { recursive: true });
+      writeFileSync(join(dir, "cli", "index.ts"), "export {};\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "two"]);
+      const second = git(["rev-parse", "HEAD"]);
+
+      expect(buildIsFresh(git, dir, first, second)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a recorded commit this checkout does not have is stale", () => {
+    // A rebase rewrites history, so a stamp can name a commit that is gone.
+    // `git diff` then fails and prints nothing, which must not read as "fresh".
+    const dir = repo();
+    try {
+      writeFileSync(join(dir, ".gitignore"), "x\n");
+      const git = gitIn(dir);
+      git(["add", "."]);
+      git(["commit", "-qm", "one"]);
+      const head = git(["rev-parse", "HEAD"]);
+
+      expect(buildIsFresh(git, dir, "0".repeat(40), head)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

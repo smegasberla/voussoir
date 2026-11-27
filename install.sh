@@ -304,6 +304,17 @@ mkdir -p "$SHARE"
 printf '%s\n' "$SRC" > "$SHARE/source"
 log "recorded the source checkout in $SHARE/source"
 
+# Record the commit too. `update` compares this against the checkout's HEAD and
+# only rebuilds when `cli/` changed, so an install with no stamp always looks
+# stale; a commit written here is what makes "already current" true.
+if COMMIT=$(git -C "$SRC" rev-parse HEAD 2>/dev/null); then
+  printf '%s\n' "$COMMIT" > "$SHARE/built"
+  log "recorded the built commit in $SHARE/built"
+else
+  rm -f "$SHARE/built"
+  warn "no git commit recorded; the next update will rebuild once"
+fi
+
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *) log "add it to PATH:  export PATH=\"$PREFIX/bin:\$PATH\"" ;;

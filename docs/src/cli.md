@@ -304,13 +304,18 @@ These are decisions, not gaps waiting to be filled:
 - **No implicit self-update.** `voussoir update` exists, but it only runs when you
   ask; there is no background check. The default is to fast-forward the checkout
   `install.sh` built the CLI from and rebuild it, because this project ships from
-  source rather than from published releases. `--feed` is still there for anyone
+  source rather than from published releases. It rebuilds only when `cli/` changed
+  since that commit, so committing a `.gitignore` does not recompile the CLI.
+  `--feed` is still there for anyone
   serving prebuilt binaries of their own, and that path verifies the download's
   `sha256` before renaming it into place. `--check` reports without changing
   anything on either path.
 - **No global state.** Every command reads and writes the project directory and the
   standard toolchain locations, nothing else. Two projects never interfere, and a
-  CI cache is the only thing that survives a clean checkout.
+  CI cache is the only thing that survives a clean checkout. The one exception is
+  `update`, which reads `~/.local/share/voussoir/source` to find the checkout it was
+  installed from, and `~/.local/share/voussoir/built` for the commit it was built
+  from, both written by `install.sh`.
 
 ## What it does not do
 
