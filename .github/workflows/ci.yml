@@ -138,7 +138,18 @@ jobs:
       # so the job and the crate cannot drift apart.
       - name: Read the declared MSRV
         id: msrv
-        run: echo "version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["rust_version"])')" >> "$GITHUB_OUTPUT"
+        run: |
+          # Selected by name, not position: a reordered workspace member would
+          # otherwise hand this job another crate's (or no) rust-version.
+          echo "version=$(cargo metadata --no-deps --format-version 1 | python3 -c '
+          import json, sys
+          packages = json.load(sys.stdin)["packages"]
+          crate = next(p for p in packages if p["name"] == "voussoir")
+          version = crate.get("rust_version")
+          if not version:
+              sys.exit("voussoir/Cargo.toml declares no rust-version")
+          print(version)
+          ')" >> "$GITHUB_OUTPUT"
       # The point of declaring an MSRV is that it is true. A dependency's
       # `rust-version` bump otherwise reaches users as a build failure with no
       # warning; here it fails the pull request that caused it.
