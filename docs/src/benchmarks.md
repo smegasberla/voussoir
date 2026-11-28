@@ -97,6 +97,11 @@ path scales better" is a number rather than a belief. It also fails when the poo
 path is slower than thread-per-call at the concurrency level where it is supposed
 to win, which would mean the runtime is misconfigured rather than merely slower.
 
+Both halves of `scripts/bench.ts` run in CI, so neither number is a snapshot taken
+the last time someone remembered. The gate is a ratio between two binaries built in
+the same run — which is what makes it safe on a shared runner — and it fails on a
+real regression of the startup path rather than on machine noise.
+
 ## Reading a result
 
 ```

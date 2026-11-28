@@ -307,65 +307,147 @@ impl App {
     ///
     /// In a debug build, `VOUSSOIR_DEV_URL` redirects the webview at a dev server so
     /// the frontend hot-reloads without touching Rust. Release builds ignore it.
+    ///
+    /// The body is four named steps, in the order they have to happen, and it is the
+    /// same rule `ipc` follows — reading one concern should not require scrolling past
+    /// the next. The entry point was the last place in the crate breaking it.
     pub fn run(self) -> Result<(), Error> {
-        reporting::install_panic_hook();
-        // Chained after it, so a crash is on record before the process dies and the
-        // next launch can say which build stopped and why.
-        #[cfg(all(
-            feature = "updater",
-            not(any(target_os = "android", target_os = "ios"))
-        ))]
-        crate::rollback::install_crash_hook();
-        // Read before anything else can log, so a startup denial is recorded
-        // instead of only printed.
-        diagnostics::init_from_env();
-
-        // An update installed on the previous run may not survive its own launch.
-        // The guard counts this launch and, on a second attempt with no
-        // confirmation, restores the copy the installer kept. It is a no-op when
-        // no update is pending, so a normal start pays one `exists` call.
-        #[cfg(all(
-            feature = "updater",
-            not(any(target_os = "android", target_os = "ios"))
-        ))]
-        {
-            if let Ok(current) = std::env::current_exe() {
-                if let crate::rollback::Startup::RolledBack {
-                    restored,
-                    version,
-                    crash,
-                } = crate::rollback::guard(&current)
-                {
-                    match crash {
-                        Some(reason) => eprintln!(
-                            "voussoir: {version} stopped without exiting cleanly ({reason}); \
-                             restored the previous build"
-                        ),
-                        None => eprintln!(
-                            "voussoir: {version} did not start; restored the previous build"
-                        ),
-                    }
-                    // Start the restored binary as its own process: this one is
-                    // running the build that never reached a window.
-                    crate::updater::spawn_and_exit_for_rollback(restored);
-                }
-            }
-        }
+        install_startup_guards();
+        // Before the loop, because this run may *be* the second attempt after an
+        // update that never reached a window. It does not return when it fires: the
+        // restored binary replaces this process instead of continuing in it.
+        restore_after_a_failed_update();
 
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
+        let shell = Shell::assemble(self, proxy);
+        // Taken before the shell is consumed: the loop's teardown event prints the
+        // latency summary, which lives on the registry the handlers hold.
+        let summary = Arc::clone(&shell.registry);
+        let natives = Natives::build(&shell, &event_loop)?;
+        run_event_loop(event_loop, loop_state(shell, natives), summary);
+        Ok(())
+    }
+}
 
-        let mut config = self.config;
-        if let Some(entry) = self.window.entry.clone() {
+// The pieces `App::run` is built from. The split is by concern rather than by size,
+// so each one can be read without the others: what runs before anything else, what
+// runs when the previous run failed, what the first window is made of, and what the
+// loop does with it.
+
+/// Install the hooks that must exist before anything can fail.
+///
+/// The order matters, and it is the second hook's reason for existing: the crash
+/// hook is chained *after* the panic hook, so a crash is on record before the process
+/// dies and the next launch can say which build stopped and why. Diagnostics come
+/// last, because nothing above them should be able to log into a sink that is not
+/// readable yet.
+fn install_startup_guards() {
+    reporting::install_panic_hook();
+    #[cfg(all(
+        feature = "updater",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    crate::rollback::install_crash_hook();
+    // Read before anything else can log, so a startup denial is recorded instead of
+    // only printed.
+    diagnostics::init_from_env();
+}
+
+/// Revert an update installed by the previous run that never confirmed itself.
+///
+/// The guard counts launches and, on a second attempt with no confirmation, restores
+/// the copy the installer kept. It is a no-op when no update is pending, so a normal
+/// start pays one `exists` call.
+#[cfg(all(
+    feature = "updater",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+fn restore_after_a_failed_update() {
+    let Ok(current) = std::env::current_exe() else {
+        return;
+    };
+    let crate::rollback::Startup::RolledBack {
+        restored,
+        version,
+        crash,
+    } = crate::rollback::guard(&current)
+    else {
+        return;
+    };
+    match crash {
+        Some(reason) => eprintln!(
+            "voussoir: {version} stopped without exiting cleanly ({reason}); \
+             restored the previous build"
+        ),
+        None => eprintln!("voussoir: {version} did not start; restored the previous build"),
+    }
+    // Start the restored binary as its own process: this one is running the build
+    // that never reached a window.
+    crate::updater::spawn_and_exit_for_rollback(restored);
+}
+
+/// Without the updater nothing can be pending, so there is nothing to revert.
+#[cfg(not(all(
+    feature = "updater",
+    not(any(target_os = "android", target_os = "ios"))
+)))]
+fn restore_after_a_failed_update() {}
+
+/// Everything a window needs, resolved from the builder and the configuration.
+///
+/// This is the seam between "what the app asked for" and "what the loop runs". The
+/// builder is consumed here rather than read at the point of use, so the fields a
+/// window is created from are named once instead of being reached for through `self`
+/// throughout the loop's setup.
+struct Shell {
+    /// The app's declared name, which the menu bar takes as its title. Read only by
+    /// the menu, so a shell without it does not carry the field.
+    #[cfg(feature = "menu")]
+    config: Config,
+    closed: Option<CloseHook>,
+    /// Debug builds always have devtools; a release build gets them only with the
+    /// `devtools` feature. Settled here so the factory and the loop cannot disagree.
+    show_devtools: bool,
+    /// The menu declarations, kept because the bar is built once a window exists to
+    /// attach it to.
+    #[cfg(feature = "menu")]
+    menus: Vec<menu::MenuGroup>,
+    /// The tray declaration, kept for the same reason: the icon outlives this call and
+    /// its clicks route through the loop.
+    #[cfg(feature = "tray")]
+    tray: Option<tray::TrayConfig>,
+    /// The window the app asks for when nothing else does.
+    first: WindowOptions,
+    registry: Arc<Registry>,
+    handle: AppHandle,
+    /// Built once, after the handle exists, and shared by every window the app opens
+    /// — the first included.
+    factory: crate::BuilderFactory,
+    spec: Arc<windows::Spec>,
+}
+
+impl Shell {
+    /// Resolve the builder into what the loop needs.
+    ///
+    /// Everything that must be true *before the first window can call in* happens
+    /// here: the entry page is settled, the built-ins and allowlists are folded into
+    /// the registry, reloads are watching, and the handle is published. A platform
+    /// callback can arrive before the first window exists — Android's activity start,
+    /// a menu click delivered early — which is why the handle is published rather
+    /// than kept local.
+    fn assemble(app: App, proxy: tao::event_loop::EventLoopProxy<UserEvent>) -> Self {
+        let mut config = app.config;
+        if let Some(entry) = app.window.entry.clone() {
             config.entry = entry;
         }
-        let entry = if self.entry.is_empty() {
+        let entry = if app.entry.is_empty() {
             config.entry.clone()
         } else {
-            self.entry.clone()
+            app.entry.clone()
         };
 
-        let mut registry = self.registry;
+        let mut registry = app.registry;
         register_builtins(&mut registry, &config);
         registry.set_allowlist(config.commands.clone());
         registry.set_window_allowlist(config.window_commands.clone());
@@ -374,27 +456,27 @@ impl App {
 
         // Reloads must be running before the first window can call in.
         #[cfg(feature = "hot-reload")]
-        if let Some(lib) = &self.hot {
-            registry.set_hot(std::sync::Arc::clone(lib));
+        if let Some(lib) = &app.hot {
+            registry.set_hot(Arc::clone(lib));
             hot::HotLib::watch(lib);
         }
 
         let registry = Arc::new(registry);
-        // One registry of open labels, shared by the handle (so any handler can
-        // read it) and the event loop (which is what opens and closes windows).
+        // One registry of open labels, shared by the handle (so any handler can read
+        // it) and the event loop (which is what opens and closes windows).
         let open = windows::OpenWindows::new();
-        // The declarations are all a tray or menu update needs to be validated,
-        // so the handle carries them; the native objects stay in the loop below.
-        // With neither feature compiled in there is nothing to declare, and
-        // `Declared::new` does not exist, so the empty form is used instead.
+        // The declarations are all a tray or menu update needs to be validated, so the
+        // handle carries them; the native objects stay in the loop. With neither
+        // feature compiled in there is nothing to declare, and `Declared::new` does not
+        // exist, so the empty form is used instead.
         let declared = {
             #[cfg(any(feature = "tray", feature = "menu"))]
             {
                 Arc::new(live::Declared::new(
                     #[cfg(feature = "tray")]
-                    self.tray.as_ref(),
+                    app.tray.as_ref(),
                     #[cfg(feature = "menu")]
-                    &self.menus,
+                    &app.menus,
                 ))
             }
             #[cfg(not(any(feature = "tray", feature = "menu")))]
@@ -402,109 +484,127 @@ impl App {
                 Arc::new(live::Declared::empty())
             }
         };
-        let handle = AppHandle::new(
-            proxy,
-            Arc::clone(&registry),
-            open.clone(),
-            entry.clone(),
-            declared,
-        );
+        let handle = AppHandle::new(proxy, Arc::clone(&registry), open, entry.clone(), declared);
 
-        // Published before anything can call back, and on every platform: an
-        // outer bootstrap (the Android one) has to answer with the same registry
-        // the webview uses, and a platform callback can arrive before the first
-        // window exists.
+        // Published before anything can call back, and on every platform: an outer
+        // bootstrap (the Android one) has to answer with the same registry the webview
+        // uses, and a platform callback can arrive before the first window exists.
         platform::set_registry(&registry);
         platform::set_app_handle(&handle);
 
         let spec = Arc::new(windows::Spec {
-            entry,
+            entry: entry.clone(),
             default_title: config.title.clone(),
             default_size: (config.width, config.height),
-            dev_origin: self.dev_url.clone(),
+            dev_origin: app.dev_url.clone(),
         });
 
-        let show_devtools = self.want_devtools || cfg!(debug_assertions);
-        // Read before `config` is consumed below; the page's default deadline.
-        let registry_timeout = config.command_timeout_ms;
+        // Debug builds always have devtools; a release build gets them only with the
+        // `devtools` feature (or `full`).
+        let show_devtools = app.want_devtools || cfg!(debug_assertions);
         let factory = build_factory(
             Arc::clone(&registry),
             handle.clone(),
-            self.assets,
-            self.dev_url.clone(),
-            self.ready.map(Arc::new),
+            app.assets,
+            app.dev_url.clone(),
+            app.ready.map(Arc::new),
             show_devtools,
-            registry_timeout,
+            config.command_timeout_ms,
         );
-        let closed = self.closed.map(Arc::new);
 
-        // First window.
+        // The app's own window uses the app's own surface: a narrower allowlist is
+        // something a command asks for when it opens a window itself. The label
+        // defaults to the entry page, which is what `__voussoir_close` and every
+        // emitted event address.
         let first = WindowOptions {
-            entry: Some(spec.entry.clone()),
-            title: self.window.title.clone(),
-            width: self.window.width,
-            height: self.window.height,
-            label: self
+            entry: Some(entry),
+            title: app.window.title.clone(),
+            width: app.window.width,
+            height: app.window.height,
+            label: app
                 .window
                 .label
                 .clone()
                 .or_else(|| Some(spec.entry.clone())),
-            // The app's own window uses the app's own surface; a narrower lane
-            // is something a command asks for when it opens a window itself.
             allowlist: None,
         };
-        // The first window is built here rather than through `open_window`, so
-        // its label is registered by hand. Not on iOS: there the window *is*
-        // created through `open_window`, and that call reserves the label
-        // itself and refuses one that is already open. Registering it first made
-        // the app reject its own first window, so no page ever loaded.
-        #[cfg(not(target_os = "ios"))]
-        handle.window_registry().insert(&spec.label_for(&first));
-        #[cfg(not(target_os = "ios"))]
-        let window = WindowBuilder::new()
-            .with_title(spec.title_for(&first))
-            .with_inner_size(windows::size_for(&first, spec.default_size))
-            .build(&event_loop)
-            .map_err(|e| Error::Runtime(e.to_string()))?;
-        #[cfg(not(target_os = "ios"))]
-        let webview = build_webview(
-            factory(
-                spec.url_for(&spec.entry_for(&first)),
-                Some(spec.label_for(&first)),
-            ),
-            &window,
-        )?;
 
-        // tao builds a window against `UIApplication`, which does not exist
-        // until `event_loop.run` calls `UIApplicationMain`; iOS asks for the
-        // first window through the event a `window.open` command uses and
-        // gets it once the loop is running.
-        #[cfg(target_os = "ios")]
-        handle
-            .open_window(first)
-            .map_err(|e| Error::Runtime(e.to_string()))?;
+        Self {
+            #[cfg(feature = "menu")]
+            config,
+            closed: app.closed,
+            show_devtools,
+            #[cfg(feature = "menu")]
+            menus: app.menus,
+            #[cfg(feature = "tray")]
+            tray: app.tray,
+            first,
+            registry,
+            handle,
+            factory,
+            spec,
+        }
+    }
+}
 
-        // Both natives stay alive for the whole run: the menu is the bar itself,
-        // and dropping the tray handle removes the icon from the status area. They
-        // also have to be reachable from the loop, because a runtime update is
-        // applied there rather than from the caller's thread.
+/// The native objects a run keeps alive, and the tables their clicks resolve
+/// through.
+///
+/// The menu and the tray have to outlive the first window: the menu *is* the bar, and
+/// dropping the tray handle removes the icon from the status area. They also have to
+/// reach the loop, because a runtime update is applied there rather than from the
+/// caller's thread.
+struct Natives {
+    /// Every open window, keyed by tao's id.
+    open: windows::Windows,
+    #[cfg(feature = "menu")]
+    menu: Option<menu::MenuHandle>,
+    #[cfg(feature = "menu")]
+    menu_commands: std::collections::HashMap<String, String>,
+    #[cfg(feature = "tray")]
+    tray: Option<tray::TrayHandle>,
+    #[cfg(feature = "tray")]
+    tray_commands: std::collections::HashMap<String, String>,
+}
+
+impl Natives {
+    /// Build the first window, its webview, then the natives that hang off it.
+    ///
+    /// The order is forced by what each one needs: a webview attaches to a window, a
+    /// menu attaches to a window, and a tray only has to outlive one.
+    fn build(
+        shell: &Shell,
+        event_loop: &tao::event_loop::EventLoop<UserEvent>,
+    ) -> Result<Self, Error> {
+        let (mut open, window) = first_window(shell, event_loop)?;
+        let label = shell.spec.label_for(&shell.first);
+        let webview = match &window {
+            Some(window) => Some(build_webview(
+                (shell.factory)(
+                    shell.spec.url_for(&shell.spec.entry_for(&shell.first)),
+                    Some(label.clone()),
+                ),
+                window,
+            )?),
+            None => None,
+        };
+
+        // Attaching a menu is a window operation on Linux and Windows, and a no-op on
+        // macOS (the bar belongs to the app) and iOS.
         #[cfg(feature = "menu")]
-        let (menu_handle, menu_commands) = {
-            let built = build_menu(&self.menus, &handle, &config.name);
-            #[cfg(not(target_os = "ios"))]
-            let attached = built.as_ref().map(|built| built.attach(&window));
-            #[cfg(not(target_os = "ios"))]
-            if let Some(Err(error)) = attached {
-                eprintln!("voussoir: menu could not be attached: {error}");
+        let (menu, menu_commands) = {
+            let built = build_menu(&shell.menus, &shell.handle, &shell.config.name);
+            if let (Some(built), Some(window)) = (&built, &window) {
+                if let Err(error) = built.attach(window) {
+                    eprintln!("voussoir: menu could not be attached: {error}");
+                }
             }
-            #[cfg(target_os = "ios")]
-            let _ = &built;
-            (built, menu_command_map(&self.menus))
+            (built, menu_command_map(&shell.menus))
         };
 
         #[cfg(feature = "tray")]
-        let (tray_handle, tray_commands) = {
-            let commands: std::collections::HashMap<String, String> = self
+        let (tray, tray_commands) = {
+            let commands = shell
                 .tray
                 .as_ref()
                 .map(|config| {
@@ -519,74 +619,132 @@ impl App {
                         .collect()
                 })
                 .unwrap_or_default();
-            (build_tray(&self.tray, &handle), commands)
+            (build_tray(&shell.tray, &shell.handle), commands)
         };
 
-        let mut state = event_loop::LoopState {
-            fired: std::sync::Arc::new(Fired::default()),
-            open_labels: handle.window_registry(),
-            open: {
-                #[cfg(not(target_os = "ios"))]
-                let open = {
-                    let mut open = windows::Windows::new();
-                    windows::insert(
-                        &mut open,
-                        window.id(),
-                        windows::WindowEntry {
-                            label: spec.label_for(&first),
-                            window,
-                            webview,
-                        },
-                    );
-                    open
-                };
-                #[cfg(target_os = "ios")]
-                let open = windows::Windows::new();
-                open
-            },
-            modifiers: ModifiersState::empty(),
-            spec,
-            factory,
-            handle,
-            closed,
-            show_devtools,
+        if let (Some(window), Some(webview)) = (window, webview) {
+            windows::insert(
+                &mut open,
+                window.id(),
+                windows::WindowEntry {
+                    label,
+                    window,
+                    webview,
+                },
+            );
+        }
+
+        Ok(Self {
+            open,
+            #[cfg(feature = "menu")]
+            menu,
             #[cfg(feature = "menu")]
             menu_commands,
             #[cfg(feature = "tray")]
-            tray_commands,
-            #[cfg(feature = "menu")]
-            menu: menu_handle,
+            tray,
             #[cfg(feature = "tray")]
-            tray: tray_handle,
-        };
-
-        // `run` never returns, so the summary cannot live after it. The loop's
-        // own teardown event is the last moment the totals are complete, and it
-        // is also the only hook that fires on every platform.
-        let summary_registry = Arc::clone(&registry);
-        #[cfg(all(
-            feature = "updater",
-            not(any(target_os = "android", target_os = "ios"))
-        ))]
-        let pending = std::env::current_exe().ok();
-        event_loop.run(move |event, event_loop, control_flow| {
-            if matches!(event, Event::LoopDestroyed) {
-                print_latency_summary(&summary_registry);
-                // The pending update is confirmed here, not when the first window
-                // appears: only a deliberate shutdown proves the build runs. A
-                // build that crashes during use never reaches this, so its marker
-                // survives and the next launch reverts it.
-                #[cfg(all(
-                    feature = "updater",
-                    not(any(target_os = "android", target_os = "ios"))
-                ))]
-                if let Some(target) = &pending {
-                    crate::rollback::confirm(target);
-                }
-            }
-            event_loop::dispatch(&mut state, event, event_loop, control_flow);
-        });
+            tray_commands,
+        })
     }
+}
+
+/// Build the app's first window, or put in a request for one where it cannot exist
+/// yet.
+///
+/// Returns the window when this platform builds it before the loop runs, and `None`
+/// on iOS, where tao builds against `UIApplication` — which does not exist until
+/// `event_loop.run` calls `UIApplicationMain`. There the window is requested through
+/// the same event a `window.open` command uses, and arrives once the loop is running.
+///
+/// On every other platform the window is built here rather than through
+/// `open_window`, so its label is registered by hand. Not on iOS: that call reserves
+/// the label itself and refuses one that is already open, and registering it first
+/// made the app reject its own first window, so no page ever loaded.
+#[cfg(not(target_os = "ios"))]
+fn first_window(
+    shell: &Shell,
+    event_loop: &tao::event_loop::EventLoop<UserEvent>,
+) -> Result<(windows::Windows, Option<tao::window::Window>), Error> {
+    let spec = &shell.spec;
+    let first = &shell.first;
+    shell
+        .handle
+        .window_registry()
+        .insert(&spec.label_for(first));
+    let window = WindowBuilder::new()
+        .with_title(spec.title_for(first))
+        .with_inner_size(windows::size_for(first, spec.default_size))
+        .build(event_loop)
+        .map_err(|e| Error::Runtime(e.to_string()))?;
+    Ok((windows::Windows::new(), Some(window)))
+}
+
+#[cfg(target_os = "ios")]
+fn first_window(
+    shell: &Shell,
+    _event_loop: &tao::event_loop::EventLoop<UserEvent>,
+) -> Result<(windows::Windows, Option<tao::window::Window>), Error> {
+    shell
+        .handle
+        .open_window(shell.first.clone())
+        .map_err(|e| Error::Runtime(e.to_string()))?;
+    Ok((windows::Windows::new(), None))
+}
+
+/// The loop state both halves of setup feed into.
+fn loop_state(shell: Shell, natives: Natives) -> event_loop::LoopState {
+    event_loop::LoopState {
+        fired: Arc::new(Fired::default()),
+        open_labels: shell.handle.window_registry(),
+        open: natives.open,
+        modifiers: ModifiersState::empty(),
+        spec: shell.spec,
+        factory: shell.factory,
+        handle: shell.handle,
+        closed: shell.closed.map(Arc::new),
+        show_devtools: shell.show_devtools,
+        #[cfg(feature = "menu")]
+        menu_commands: natives.menu_commands,
+        #[cfg(feature = "tray")]
+        tray_commands: natives.tray_commands,
+        #[cfg(feature = "menu")]
+        menu: natives.menu,
+        #[cfg(feature = "tray")]
+        tray: natives.tray,
+    }
+}
+
+/// Run the tao loop until the last window closes.
+fn run_event_loop(
+    event_loop: tao::event_loop::EventLoop<UserEvent>,
+    mut state: event_loop::LoopState,
+    summary: Arc<Registry>,
+) {
+    // The loop never returns, so the summary cannot live after it. The loop's own
+    // teardown event is the last moment the totals are complete, and it is also the
+    // only hook that fires on every platform.
+    #[cfg(all(
+        feature = "updater",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    let pending = std::env::current_exe().ok();
+    event_loop.run(move |event, event_loop, control_flow| {
+        if matches!(event, Event::LoopDestroyed) {
+            print_latency_summary(&summary);
+            // The pending update is confirmed here, not when the first window
+            // appears: only a deliberate shutdown proves the build runs. A build that
+            // crashes during use never reaches this, so its marker survives and the
+            // next launch reverts it.
+            #[cfg(all(
+                feature = "updater",
+                not(any(target_os = "android", target_os = "ios"))
+            ))]
+            if let Some(target) = &pending {
+                crate::rollback::confirm(target);
+            }
+        }
+        event_loop::dispatch(&mut state, event, event_loop, control_flow);
+    });
 }
 
 /// The platform name the page receives as `voussoir.platform`.

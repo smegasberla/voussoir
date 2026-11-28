@@ -20,6 +20,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+// Through the shell's re-export, because this crate deliberately does not depend on
+// serde_json itself: the shell is the only dependency a fuzz target needs, and
+// `voussoir::serde_json` is what an app crate would use too.
+use voussoir::serde_json;
 
 fuzz_target!(|data: &[u8]| {
     // The HTTP body: must either parse or refuse, never panic.

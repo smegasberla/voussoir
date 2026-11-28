@@ -11,6 +11,14 @@
 use crate::{AppHandle, Registry};
 use serde_json::Value;
 
+/// The endpoint path decoder, re-exported here because this module *is* the seam.
+///
+/// A page's URL reaches it before anything else does — before the allowlist, before
+/// the handler table — so it belongs next to the parsers below rather than behind
+/// `ipc`. The nightly fuzz harness in `fuzz/` reaches it through this re-export,
+/// which is also what an out-of-tree harness would use.
+pub use crate::ipc::method_from_path;
+
 /// Which transport a page's calls arrive through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

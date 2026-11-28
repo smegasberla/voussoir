@@ -84,6 +84,14 @@ jobs:
       - name: No dependency tree in the framework
         run: test ! -d cli/node_modules && test ! -d promo/node_modules
 
+      # The fuzz harness in `fuzz/` needs nightly for `-Zsanitizer=address`, so its
+      # full runs are a schedule (`.github/workflows/fuzz.yml`). What has to be true
+      # on every push is that it still *builds*: it was compiled by nothing for long
+      # enough to drift out of date, and a harness that does not compile fuzzes
+      # nothing. `cargo check` rather than a build, because the point is the source.
+      - name: The fuzz harness still compiles
+        run: cargo +nightly check --manifest-path fuzz/Cargo.toml --bins
+
       # The book is documentation that has to stay buildable: an orphan chapter or
       # and a link to a chapter the summary omits fails here
       # installed (`--check` validates structure only).
@@ -122,6 +130,26 @@ jobs:
 
       - name: Hot-reload end-to-end (headless)
         run: xvfb-run -a bun scripts/verify-hot.ts
+
+      # Cold start against the bare wry+tao control, gated. The gate is a ratio to
+      # a binary built in the same run, so a slow runner makes both slow and the
+      # comparison holds; only a real change to the startup path moves it.
+      #
+      # It used to be a command in the book and nowhere else, which made the
+      # README's "reproducible from a checkout" depend on someone remembering to
+      # run it. A regression could ship and be discovered later, if at all.
+      - name: Cold start (gated, headless)
+        run: |
+          cargo build --release -p baseline --bin bare
+          cargo build --release --example hello
+          xvfb-run -a bun scripts/bench.ts
+
+      # The dispatch benchmark answers a design question with a number instead of
+      # a claim: thread-per-call versus the shared runtime. Its assertions are
+      # ratios, so it gates too — a pooled path that became categorically worse
+      # than a thread per call is a regression, not a noisy number.
+      - name: Async dispatch (gated)
+        run: bun scripts/bench.ts --dispatch
 
   msrv:
     name: MSRV (declared rust-version)

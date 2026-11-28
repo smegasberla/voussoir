@@ -34,7 +34,9 @@ voussoir-android/example/app/src/main/jniLibs/
 # Ignored for the same reason as /website/: independent history and releases.
 /relay/
 
-# libFuzzer build output and crash corpus
+# libFuzzer build output, the corpus it accumulates, and anything it finds.
+# `fuzz/Cargo.lock` is committed on purpose: the harness pins `libfuzzer-sys`, and a
+# lockfile is what makes a scheduled run reproducible when it reports a finding.
 /fuzz/target/
 /fuzz/corpus/
 /fuzz/artifacts/

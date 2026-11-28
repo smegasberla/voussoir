@@ -1,0 +1,94 @@
+name: Fuzz
+
+# The two parsers that turn page bytes into a command call, run under libFuzzer.
+#
+# This is a schedule rather than a push gate, and the reason is stated where it
+# costs something: `cargo fuzz` needs nightly and `libfuzzer-sys`, which the
+# shipping crate must never depend on, so a 60-second run on every push would add
+# a nightly toolchain install to the critical path for a check that is far more
+# useful with minutes than with seconds.
+#
+# What runs on every push instead is `voussoir/src/ipc/fuzz.rs`: a fixed-seed
+# mutational loop over the same three parsers, under `cargo test`. That module is
+# the always-on version; this is the coverage-guided one. Before this workflow
+# existed the harness was compiled by nothing and run by nobody, so it could — and
+# did — drift until it no longer built.
+
+on:
+  schedule:
+    # 03:17 on Mondays, off the hour so it does not race the release workflow.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds per target"
+        required: false
+        default: "300"
+
+env:
+  CARGO_TERM_COLOR: always
+  # One target can leave a corrupt input behind; the other must still run.
+  RUST_BACKTRACE: 1
+
+jobs:
+  libfuzzer:
+    name: libFuzzer (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [envelope, path]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install webview and build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
+      # Nightly is a hard requirement of `-Zsanitizer=address`, not a preference.
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-fuzz-${{ hashFiles('**/Cargo.lock', 'fuzz/Cargo.toml') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # The corpus is what makes a scheduled run worth more than a random one:
+      # today's run starts from everything any earlier run found. `corpus/` and
+      # `artifacts/` are gitignored, so this cache is the only thing that carries
+      # them forward.
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        working-directory: fuzz
+        # The crash path is the exit status: libFuzzer exits non-zero on a finding
+        # and the artifact it writes is uploaded below. `-rss_limit_mb` is there
+        # because a leak in the parser is a finding too, not a runner problem.
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=${{ github.event.inputs.seconds || '300' }} \
+            -rss_limit_mb=2048 \
+            -artifact_prefix=artifacts/
+
+      - name: Upload a finding
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-finding
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

@@ -346,6 +346,7 @@ voussoir-android/      Android platform crate
 voussoir-ios/          iOS bootstrap crate
 probe/                 test fixture: commands that panic on purpose, for verify.ts
 baseline/              bare wry+tao app: the measurement baseline
+fuzz/                  libFuzzer harness for the two parsers that take page bytes
 cli/                   Bun CLI, dev tooling only, never in the artifact
   template/            scaffold files, inlined into the CLI at compile time
   src/icon.ts          PNG encoder and default icon, no image dependency
@@ -353,6 +354,7 @@ brand/                 the mark: voussoir.svg plus PNG renders
 docs/                  the documentation, plain Markdown in docs/src
 website/               the site: renders docs/src, no mdBook and no deps
 scripts/verify.ts      end-to-end checks, and the source of the numbers above
+scripts/bench.ts       cold start against `baseline/`, and the dispatch comparison
 ```
 
 The book in `docs/src` is the narrative version: installing, your first app,
@@ -370,11 +372,18 @@ asserted in CI. Dependency advisories, licences and sources are checked by
 
 ## Contributing
 
-The gates CI runs are `cargo test`, `bun test` in `cli/`, and
-`scripts/verify.ts`. A change to the shell should also keep
-`cargo clippy --all-targets -- -D warnings` and `cargo fmt --all --check` clean.
-A bug report with a reproduction is worth more than a feature request; this
-project says no to features on purpose.
+The gates CI runs are `cargo test`, `bun test` in `cli/`, `scripts/verify.ts`,
+`scripts/verify-hot.ts`, and both halves of `scripts/bench.ts`. A change to the
+shell should also keep `cargo clippy --all-targets -- -D warnings` and
+`cargo fmt --all --check` clean. A bug report with a reproduction is worth more
+than a feature request; this project says no to features on purpose.
+
+The numbers in this README are produced by commands CI runs, not by commands
+someone remembered to run: cold start is gated against `baseline/` at +10%, and
+the dispatch comparison asserts that the pooled path stays competitive with
+thread-per-call. The fuzz harness is the one exception, and it is stated where it
+costs something — `cargo fuzz` needs nightly, so its full runs are a weekly
+schedule while `cargo check` on the harness runs on every push.
 
 The framework checkout stays free of `node_modules`: the CLI needs no packages
 to run or test, and `scripts/typecheck-cli.sh` installs TypeScript and Bun's

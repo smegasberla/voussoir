@@ -5,11 +5,17 @@
 //! panic here aborts the request thread; the original implementation sliced the
 //! path `&str` by byte index and did exactly that for `/__voussoir/%€`.
 //!
+//! Reached through `voussoir::transport`, which is the module that owns this seam:
+//! the decoder turns a URL into a command name before anything else touches it.
+//!
 //! Run with:
 //!
 //! ```sh
 //! cargo +nightly fuzz run path -- -max_total_time=60
 //! ```
+//!
+//! CI runs both targets on a schedule (`.github/workflows/fuzz.yml`); the
+//! always-on version is `voussoir/src/ipc/fuzz.rs` under `cargo test`.
 
 #![no_main]
 
@@ -25,7 +31,7 @@ fuzz_target!(|data: &[u8]| {
 
     // Both shapes: the full path a page would request, and the bare suffix.
     let with_prefix = format!("/__voussoir/{text}");
-    let decoded = voussoir::method_from_path(&with_prefix);
+    let decoded = voussoir::transport::method_from_path(&with_prefix);
 
     if let Some(method) = decoded {
         // A decoded name must be a usable command name: non-empty, and if it has
@@ -33,7 +39,7 @@ fuzz_target!(|data: &[u8]| {
         assert!(!method.is_empty(), "empty method");
         if !method.contains('%') {
             assert_eq!(
-                voussoir::method_from_path(&format!("/__voussoir/{method}")),
+                voussoir::transport::method_from_path(&format!("/__voussoir/{method}")),
                 Some(method),
                 "decoding changed a name that had nothing to decode"
             );
@@ -41,5 +47,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // A path without the prefix is never a command, whatever the input.
-    assert!(voussoir::method_from_path(text).is_none() || text.starts_with("/__voussoir/"));
+    assert!(
+        voussoir::transport::method_from_path(text).is_none() || text.starts_with("/__voussoir/")
+    );
 });

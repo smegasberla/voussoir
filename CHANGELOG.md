@@ -5,6 +5,47 @@ All notable changes to the `voussoir` crate and the `voussoir` CLI. Format follo
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with the 0.x rule
 described under [Compatibility](../README.md#compatibility) in the README.
 
+## [Unreleased]
+
+### Changed
+
+- `App::run` is four named steps instead of one 280-line function, split by concern
+  the way `ipc` already is: `install_startup_guards`, `restore_after_a_failed_update`,
+  `Shell::assemble` (the builder resolved against the configuration, once),
+  `Natives::build` (first window, webview, menu, tray) and `run_event_loop`. The
+  order is unchanged and the pieces are private; `run` is still the only entry point
+  and its signature is identical. Reading what happens at startup no longer means
+  reading everything else that happens at startup. The `Shell` that falls out of
+  this also removed an accidental duplication: the webview factory, the devtools
+  flag and the command timeout were derived in two places, and are now derived once.
+
+- `voussoir::transport` re-exports `method_from_path`. The endpoint decoder is the
+  first thing page-controlled input touches, so it belongs beside the other parsers
+  in that seam rather than behind `ipc`; `voussoir::method_from_path` is unchanged
+  and still public, so nothing an app uses moved.
+
+### Fixed
+
+- The libFuzzer harness did not compile, and nothing noticed: `cargo fuzz` was not
+  run by CI at all, so both targets had drifted. `envelope.rs` used `serde_json` as
+  if it were a direct dependency, and `path.rs` called a function the crate root
+  does not export. Both are fixed, and the harness is now compiled on every push
+  (`cargo check --manifest-path fuzz/Cargo.toml --bins`) with the coverage-guided
+  runs on a weekly schedule. A fuzz target that does not build is worse than none:
+  it reports coverage nobody has.
+
+### Added
+
+- CI runs both benchmarks, and both gate. Cold start is compared against the bare
+  `wry`+`tao` control built in the same run and fails past +10%, which is what the
+  README already claimed and nothing enforced. `bench.ts --dispatch` gates too, on
+  the pooled path staying competitive with thread-per-call.
+
+- `.github/workflows/fuzz.yml`: a weekly libFuzzer run of both targets, with the
+  corpus carried between runs by cache and a finding uploaded as an artifact. The
+  always-on substitute for push-to-push coverage is the deterministic module in
+  `voussoir/src/ipc/fuzz.rs`, which needs no nightly and no budget.
+
 ## [0.1.0] - 2026-11-21
 
 First release. Nothing before this was published, so this section absorbs the

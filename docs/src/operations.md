@@ -51,7 +51,12 @@ a unit test pins them more precisely than a window can. When a chapter says
 ### `bench.ts`
 
 Cold start against a bare `wry`+`tao` control, and with `--dispatch` the cost of
-the three execution models. See [Benchmarks](benchmarks.md).
+the three execution models. Both run in CI and both gate. See
+[Benchmarks](benchmarks.md).
+
+There is a fourth check that is not a tool you run: the libFuzzer harness in
+`fuzz/` gets a weekly schedule rather than a place in this table, because it needs
+nightly and a time budget. Every push still compiles it.
 
 ### `--verbose`
 

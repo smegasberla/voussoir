@@ -350,19 +350,32 @@ does not hand an app a debug key. See
 
 The end of the chain, and it does more than start a loop. In order:
 
-1. Installs the panic hook, so a panic is recorded rather than only printed.
+1. Installs the panic hook, so a panic is recorded rather than only printed. With
+   the `updater` feature this is followed by a crash hook that is chained *after*
+   it, so a crash is on record before the process dies.
 2. Reads the diagnostics environment (`VOUSSOIR_VERBOSE`).
-3. Builds the event loop.
-4. Sets the entry page from `entry`, `window`, or the config, in that precedence.
-5. Registers the built-in commands.
-6. Applies the global and per-window allowlists from the config.
-7. **Audits the allowlist**, logging names no handler can answer.
-8. Attaches the hot library in a dev build.
-9. Runs the loop.
+3. Reverts an update installed by the previous run that never confirmed itself.
+   A no-op when nothing is pending; when it fires it does not return, because the
+   restored binary replaces this process.
+4. Builds the event loop.
+5. Sets the entry page from `entry`, `window`, or the config, in that precedence.
+6. Registers the built-in commands.
+7. Applies the global and per-window allowlists from the config.
+8. **Audits the allowlist**, logging names no handler can answer.
+9. Attaches the hot library in a dev build.
+10. Builds the first window, its webview, then the menu and the tray.
+11. Runs the loop.
 
-Step 7 is the one that turns a common mistake into a log line: an allowlist that
+Step 8 is the one that turns a common mistake into a log line: an allowlist that
 names a command you renamed says so at startup instead of looking like a missing
 command at runtime.
+
+Steps 1–3, 5–9, 10 and 11 are four separate functions in `app.rs`
+(`install_startup_guards`, `restore_after_a_failed_update`, `Shell::assemble` and
+`Natives::build`, `run_event_loop`) rather than one long body, which is the rule
+the `ipc` module follows: reading one concern should not require scrolling past the
+next. The order above is the order they are called in, and it is the whole of the
+contract between them.
 
 ### `hot_commands_from_env()`
 

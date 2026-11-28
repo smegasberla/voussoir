@@ -303,12 +303,21 @@ mystery `undefined` in one test.
 | CLI tests | `bun test` in `cli/` | scaffolder, docs check, dev server helpers |
 | End to end | `bun scripts/verify.ts` | the real transport, policy, panic path |
 | Hot reload | `bun scripts/verify-hot.ts` | the swap, and no `libloading` in release |
+| Cold start | `bun scripts/bench.ts` | startup regressions, against a control binary |
+| Dispatch | `bun scripts/bench.ts --dispatch` | a runtime that stopped paying for itself |
+| Fuzz build | `cargo +nightly check --manifest-path fuzz/Cargo.toml` | a harness that stopped compiling |
 | Coverage | `./scripts/coverage.sh` | untested code, against a floor |
 | Docs | `voussoir docs --check` | stale links and summary drift |
 
 Run the first two before opening a pull request. The rest are cheap enough to let
 CI do, but a red coverage job is worth reading: it usually means a new branch has no
 test at all, not that the percentage moved.
+
+The fuzz row is only a *build*. A libFuzzer run needs nightly and a time budget, so
+the coverage-guided version is a weekly schedule (`.github/workflows/fuzz.yml`) and
+what every push proves is that the harness still compiles. The always-on substitute
+is the fixed-seed mutational loop in `voussoir/src/ipc/fuzz.rs`, which runs under
+`cargo test` on stable with no budget at all.
 
 ## The traps
 
