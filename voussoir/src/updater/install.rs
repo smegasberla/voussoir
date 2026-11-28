@@ -19,16 +19,13 @@ use super::{is_newer, UpdateConfig};
 // ---------------------------------------------------------------------------
 
 /// How long one artifact download may take, from connect to the last byte.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// The largest artifact accepted. The shell is one binary, so 256 MiB is far
 /// past any real build and small enough that a wrong URL cannot fill a disk.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const ARTIFACT_CAP: u64 = 256 * 1024 * 1024;
 
 /// Download `url` with a deadline and a cap.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(super) fn download(
     url: &str,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
@@ -38,7 +35,6 @@ pub(super) fn download(
 
 /// [`download`] with the bounds as parameters, so a test can use a short
 /// deadline and a tiny cap against a local socket.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn download_limited(
     url: &str,
     timeout: std::time::Duration,
@@ -83,13 +79,11 @@ fn download_limited(
 }
 
 /// Rate-limit download progress so a fast local server cannot flood the page.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(super) struct ProgressThrottle {
     last: Option<std::time::Instant>,
     interval: std::time::Duration,
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl ProgressThrottle {
     pub(super) fn new(interval: std::time::Duration) -> Self {
         Self {
@@ -114,7 +108,6 @@ impl ProgressThrottle {
 }
 
 /// `target` with `suffix` appended to its file name.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn sibling(target: &Path, suffix: &str) -> PathBuf {
     let mut name = target
         .file_name()
@@ -125,7 +118,6 @@ fn sibling(target: &Path, suffix: &str) -> PathBuf {
 }
 
 /// Write `bytes` to `path` and flush them to the device before returning.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     use std::io::Write;
     let mut file = std::fs::File::create(path)
@@ -147,7 +139,6 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 /// not fatal: the update installs, it simply cannot be undone. The marker is
 /// written only when the copy exists, so no launch can loop on a restore that
 /// could never succeed.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn install_with_rollback(bytes: &[u8], target: &Path, version: &str) -> Result<(), Error> {
     let kept = crate::rollback::keep_previous(target).is_ok();
     install_bytes(bytes, target)?;
@@ -167,7 +158,6 @@ fn install_with_rollback(bytes: &[u8], target: &Path, version: &str) -> Result<(
 /// refuses that but allows *renaming* it, so the old file steps aside as `.old`
 /// and is restored if the second rename fails; the `.old` file is removed on the
 /// next install, once the process that ran it has exited.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn install_bytes(bytes: &[u8], target: &Path) -> Result<(), Error> {
     let parent = target.parent().ok_or_else(|| {
         Error::Handler(format!(
@@ -189,7 +179,7 @@ fn install_bytes(bytes: &[u8], target: &Path) -> Result<(), Error> {
     replaced
 }
 
-#[cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))]
+#[cfg(unix)]
 fn install_platform(
     temp: &Path,
     target: &Path,
@@ -220,7 +210,6 @@ fn install_platform(
 // Called by the Windows installer and by tests that run on every platform, so on a
 // non-Windows build without tests it has no caller. That is a fact about cfg.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn install_by_renaming_aside(temp: &Path, target: &Path, backup: &Path) -> Result<(), Error> {
     let stepped_aside = std::fs::rename(target, backup).is_ok();
     if let Err(error) = std::fs::rename(temp, target) {
@@ -237,7 +226,7 @@ fn install_by_renaming_aside(temp: &Path, target: &Path, backup: &Path) -> Resul
     Ok(())
 }
 
-#[cfg(all(windows, not(any(target_os = "android", target_os = "ios"))))]
+#[cfg(windows)]
 fn install_platform(
     temp: &Path,
     target: &Path,
@@ -247,7 +236,7 @@ fn install_platform(
     install_by_renaming_aside(temp, target, backup)
 }
 
-#[cfg(not(any(unix, windows, target_os = "android", target_os = "ios")))]
+#[cfg(not(any(unix, windows)))]
 fn install_platform(
     _temp: &Path,
     _target: &Path,
@@ -259,8 +248,82 @@ fn install_platform(
     ))
 }
 
+pub(super) fn apply_to(
+    update: &UpdateConfig,
+    target: &Path,
+    force: bool,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<Value, Error> {
+    let url = update.url.as_deref().ok_or_else(|| {
+        Error::Handler("no update endpoint is configured in `update.url`".to_owned())
+    })?;
+    let public_key = update.public_key.as_deref().ok_or_else(|| {
+        Error::Handler(
+            "`update.public_key` is not configured, so an update cannot be verified; add the publisher's base64 Ed25519 key to voussoir.json"
+                .to_owned(),
+        )
+    })?;
+    let body = fetch(url)?;
+    let release = parse_manifest(&body)?;
+    let signature = release.signature.as_deref().ok_or_else(|| {
+        Error::Handler(
+            "update endpoint has no `signature`; refusing an artifact the configured key cannot authenticate"
+                .to_owned(),
+        )
+    })?;
+    if !force && !is_newer(&update.current, &release.version) {
+        return Ok(json!({
+            "installed": false,
+            "reason": "up to date",
+            "current": update.current,
+            "latest": release.version,
+        }));
+    }
+    // A patch is only useful from the exact version it was built against, and
+    // only when the old binary is readable. Either way the reconstructed file
+    // must equal what a full download would have produced.
+    // Oldest-first order means the first matching hop is the furthest back the
+    // publisher supports, which is the most a user can save.
+    if let Some(patch) = release
+        .patches
+        .iter()
+        .find(|hop| hop.from == update.current)
+    {
+        if let Ok(old) = std::fs::read(target) {
+            let bytes = download(&patch.url, on_progress)?;
+            verify_sha256(&bytes, &patch.sha256)?;
+            if let Some(patch_signature) = &patch.signature {
+                verify_signature(&bytes, patch_signature, public_key)?;
+            }
+            let rebuilt = crate::delta::apply(&old, &bytes)?;
+            verify_sha256(&rebuilt, &release.sha256)?;
+            verify_signature(&rebuilt, signature, public_key)?;
+            install_with_rollback(&rebuilt, target, &release.version)?;
+            return Ok(json!({
+                "installed": true,
+                "patched": true,
+                "version": release.version,
+                "path": target.display().to_string(),
+                "notes": release.notes,
+            }));
+        }
+    }
+
+    let bytes = download(&release.url, on_progress)?;
+    verify_sha256(&bytes, &release.sha256)?;
+    verify_signature(&bytes, signature, public_key)?;
+    install_with_rollback(&bytes, target, &release.version)?;
+    Ok(json!({
+        "installed": true,
+        "patched": false,
+        "version": release.version,
+        "path": target.display().to_string(),
+        "notes": release.notes,
+    }))
+}
+
 /// Download, install and config-version rules that need a disk and a socket.
-#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+#[cfg(test)]
 mod install_tests {
     use super::super::manifest::{platform_key, sha256_hex};
     use super::*;
@@ -787,79 +850,4 @@ mod install_tests {
         let error = spawn_and_exit(PathBuf::from("/nonexistent/voussoir")).unwrap_err();
         assert!(error.to_string().contains("could not restart"), "{error}");
     }
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(super) fn apply_to(
-    update: &UpdateConfig,
-    target: &Path,
-    force: bool,
-    on_progress: &mut dyn FnMut(u64, Option<u64>),
-) -> Result<Value, Error> {
-    let url = update.url.as_deref().ok_or_else(|| {
-        Error::Handler("no update endpoint is configured in `update.url`".to_owned())
-    })?;
-    let public_key = update.public_key.as_deref().ok_or_else(|| {
-        Error::Handler(
-            "`update.public_key` is not configured, so an update cannot be verified; add the publisher's base64 Ed25519 key to voussoir.json"
-                .to_owned(),
-        )
-    })?;
-    let body = fetch(url)?;
-    let release = parse_manifest(&body)?;
-    let signature = release.signature.as_deref().ok_or_else(|| {
-        Error::Handler(
-            "update endpoint has no `signature`; refusing an artifact the configured key cannot authenticate"
-                .to_owned(),
-        )
-    })?;
-    if !force && !is_newer(&update.current, &release.version) {
-        return Ok(json!({
-            "installed": false,
-            "reason": "up to date",
-            "current": update.current,
-            "latest": release.version,
-        }));
-    }
-    // A patch is only useful from the exact version it was built against, and
-    // only when the old binary is readable. Either way the reconstructed file
-    // must equal what a full download would have produced.
-    // Oldest-first order means the first matching hop is the furthest back the
-    // publisher supports, which is the most a user can save.
-    if let Some(patch) = release
-        .patches
-        .iter()
-        .find(|hop| hop.from == update.current)
-    {
-        if let Ok(old) = std::fs::read(target) {
-            let bytes = download(&patch.url, on_progress)?;
-            verify_sha256(&bytes, &patch.sha256)?;
-            if let Some(patch_signature) = &patch.signature {
-                verify_signature(&bytes, patch_signature, public_key)?;
-            }
-            let rebuilt = crate::delta::apply(&old, &bytes)?;
-            verify_sha256(&rebuilt, &release.sha256)?;
-            verify_signature(&rebuilt, signature, public_key)?;
-            install_with_rollback(&rebuilt, target, &release.version)?;
-            return Ok(json!({
-                "installed": true,
-                "patched": true,
-                "version": release.version,
-                "path": target.display().to_string(),
-                "notes": release.notes,
-            }));
-        }
-    }
-
-    let bytes = download(&release.url, on_progress)?;
-    verify_sha256(&bytes, &release.sha256)?;
-    verify_signature(&bytes, signature, public_key)?;
-    install_with_rollback(&bytes, target, &release.version)?;
-    Ok(json!({
-        "installed": true,
-        "patched": false,
-        "version": release.version,
-        "path": target.display().to_string(),
-        "notes": release.notes,
-    }))
 }

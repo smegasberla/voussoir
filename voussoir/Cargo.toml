@@ -6,7 +6,14 @@ edition = "2021"
 # compiles at exactly this version. Without it a dependency's `rust-version` bump
 # reaches users as a build failure with no warning; with it, cargo refuses the
 # upgrade and names the constraint instead.
-rust-version = "1.85"
+#
+# 1.92 is not a preference: it is what the tree needs, and `rfd` sets it. The
+# previous 1.85 had been false for a while — the job that compiles at the declared
+# version was the only thing that noticed, and it had been failing since the
+# dependencies moved. Pinning nine crates back down (`muda` 0.21 -> 0.19,
+# `tray-icon` 0.26 -> 0.24, `rfd` 0.18 -> 0.17, two `icu` and `time` families) would
+# have made the number true for one commit, then rotted on the next `cargo update`.
+rust-version = "1.92"
 description = "Minimal Rust runtime shell: OS webview + tao window + generic JSON IPC"
 license = "MIT"
 authors = ["smegasberla <smegasberla@gmail.com>"]

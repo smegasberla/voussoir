@@ -7,6 +7,54 @@ described under [Compatibility](../README.md#compatibility) in the README.
 
 ## [Unreleased]
 
+### Fixed
+
+- `--features full` did not compile for Android, which is the scaffold's default
+  on every platform. `updater` is compiled on all targets, but its artifact half is
+  desktop work, and the gates were applied to the items inside `install.rs` and
+  `manifest.rs` while the `use` statements at the top of those files stayed
+  ungated. Gating the **modules** instead is one fact in one place rather than
+  thirty, and it removes the class of bug: a file whose body is gated and whose
+  prologue is not compiles everywhere the prologue does.
+
+- The MSRV was a false claim. `rust-version` said 1.85 while the tree needed 1.92
+  (`rfd` sets it; `muda` wants 1.90, two `icu` families and `time` want 1.88), so
+  the job that compiles at the declared version failed on every push. It now says
+  1.92 and is verified at 1.92, because pinning nine crates backwards would have
+  made the number true for one commit and rotted on the next `cargo update`.
+
+- `deny.toml` banned `ring`, and `ring` is the only crypto provider in the tree, so
+  the check failed against its own dependency graph. The list now names the
+  *alternatives* (`openssl`, `native-tls`, and rustls's other provider, `aws-lc-rs`)
+  which is the version of "one crypto stack" that can actually be checked.
+
+- Two advisories cleared by `cargo update` (`cookie` 0.18.2 -> 0.18.3,
+  `url` 2.5.8 -> 2.5.9). The third, `proc-macro-error`, has no fixed release: it is
+  named in one `ignore` entry with the reachability argument, rather than by
+  silencing unmaintained notices generally.
+
+- `voussoir init` in the iOS CI job did not pass `--ios`, which `init` needs before
+  it writes an `ios/` shell, so the job ran `ios build` against a directory that
+  was never created.
+
+### Changed
+
+- The event-loop dispatch is split by event class: `window_event` for what the
+  platform raises, `user_event` for what another thread posted. They come from
+  opposite sides of the process and are debugged differently, and the single match
+  had grown past the length the rest of the crate holds itself to.
+
+- `scripts/check-mobile-targets.sh` cross-compiles for both Android ABIs and
+  reports iOS as unverified when there is no Apple SDK, rather than printing a pass
+  it did not earn. `scripts/check-updater-gating.sh` catches the `cfg`-mismatch
+  shape in seconds, without an NDK. Both run in CI, and an `android-check` job runs
+  the first so a break fails on the commit that caused it instead of nine minutes
+  later in the emulator job.
+
+- `baseline/` and `probe/` declare `license = "MIT"` instead of being exempted in
+  `deny.toml`: an exemption list is a place a real unlicensed dependency could
+  hide, and both crates are ours.
+
 ### Added
 
 - `VOUSSOIR_SNAPSHOT=<path>` and `VOUSSOIR_DUMP=<path>`: the shell captures the

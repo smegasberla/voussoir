@@ -14,9 +14,24 @@ all-features = true
 
 [advisories]
 # Do not fail on an advisory that does not affect the build graph: `cargo deny`
-# already reasons about reachability, and ignoring unmaintained notices by
-# default would train everyone to ignore the whole job.
-ignore = []
+# already reasons about reachability, and ignoring unmaintained notices by default
+# would train everyone to ignore the whole job.
+#
+# So each entry here is one advisory, one id, and one argument. A blanket ignore
+# would be the thing this policy refuses.
+ignore = [
+  # `proc-macro-error` is unmaintained, not vulnerable: the advisory is
+  # "maintainer unreachable", with no CVE and no exploit. It reaches the tree as
+  # `glib-macros` -> `glib` -> `gtk` -> `tao`, so removing it means replacing the
+  # GTK bindings, and no version of it exists that is maintained under the same
+  # name. It is also a **proc-macro**, so it runs at build time on the machine
+  # compiling the app and ships nothing to a user: the reachability argument is
+  # that it is not in the artifact at all.
+  #
+  # Revisit when `gtk-rs` moves off it; the entry names one id so a *new*
+  # advisory against the same crate still fails.
+  { id = "RUSTSEC-2024-0370", reason = "unmaintained, build-time proc-macro only, reached through gtk-rs" },
+]
 
 [licenses]
 # Licences compatible with shipping under MIT. Anything not listed here is a
@@ -35,23 +50,35 @@ allow = [
   # obliges changes to that crate's own files to be published, and nothing in
   # Voussoir modifies it. Keeping it is a recorded choice, not an accident.
   "MPL-2.0",
+  # `webpki-roots` is the Mozilla CA bundle as source. It is data, not code, and
+  # the licence is permissive; it arrives through `ureq` -> `rustls`, and the
+  # alternative is disabling certificate verification, which is not an option.
+  "CDLA-Permissive-2.0",
 ]
 
-# The two workspace crates here are not published and carry no licence field.
-# Exempting them by name keeps the list honest instead of adding a catch-all that
-# would then hide a real unlicensed dependency.
-exceptions = [
-  { allow = ["MIT"], name = "baseline", version = "*" },
-  { allow = ["MIT"], name = "voussoir-probe", version = "*" },
-]
+# No `exceptions` block on purpose: `baseline/` and `probe/` declare
+# `license = "MIT"` in their own manifests. An exemption list is a place a real
+# unlicensed dependency could hide, and these two are ours.
 
 [bans]
-# A second version of one of these is a genuine supply-chain problem: two crypto
-# implementations in one binary is two places to be wrong.
+# Exactly one crypto provider, and this is how that is enforced.
+#
+# The list holds the *alternatives*, not the one we use. `ring` arrives through
+# `ureq` -> `rustls` and is the only provider in the tree, so banning it would
+# have banned the thing the rule exists to protect: the entry said "ring" while
+# the comment above it said "a second copy is the problem", and the file failed
+# against its own dependency graph for as long as it existed. Naming what must
+# never appear is the version of this rule that can actually be checked.
+#
+# Adding a second TLS stack is what this catches: `openssl` and `native-tls` are
+# whole alternative stacks, and `aws-lc-rs` is rustls's *other* provider — pulling
+# it in would put two crypto implementations in one binary, which is two places to
+# be wrong.
 deny = [
-  { name = "ring" },
   { name = "openssl" },
   { name = "native-tls" },
+  { name = "aws-lc-rs" },
+  { name = "aws-lc-sys" },
 ]
 
 [sources]

@@ -14,6 +14,7 @@ use tao::{
     event::{ElementState, Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopWindowTarget},
     keyboard::ModifiersState,
+    window::WindowId,
 };
 
 use crate::{
@@ -55,6 +56,11 @@ pub(crate) struct LoopState {
 }
 
 /// Handle one event against the shared loop state.
+///
+/// The split below is by **event class**, not by length: a window event comes
+/// from the platform and a `UserEvent` from another thread in this process, and
+/// the two are debugged differently. Reading one should not mean scrolling past
+/// the other, which is the same rule `ipc` follows for dispatch and registration.
 pub(crate) fn dispatch(
     state: &mut LoopState,
     event: Event<'_, UserEvent>,
@@ -62,12 +68,27 @@ pub(crate) fn dispatch(
     control_flow: &mut ControlFlow,
 ) {
     *control_flow = ControlFlow::Wait;
+    // `Event` is not `Clone`, so each half gets the variant by value rather than
+    // matching the same value twice.
     match event {
         Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            window_id,
-            ..
-        } => {
+            event, window_id, ..
+        } => window_event(state, event, window_id, control_flow),
+        Event::UserEvent(event) => user_event(state, event, event_loop, control_flow),
+        _ => {}
+    }
+}
+
+/// One platform event: closing, modifiers, keyboard, appearance, and the mobile
+/// lifecycle callbacks.
+fn window_event(
+    state: &mut LoopState,
+    event: WindowEvent,
+    window_id: WindowId,
+    control_flow: &mut ControlFlow,
+) {
+    match event {
+        WindowEvent::CloseRequested => {
             if let Some(entry) = state.open.remove(&window_id) {
                 state.open_labels.remove(&entry.label);
                 announce_close(state, &entry.label);
@@ -76,53 +97,65 @@ pub(crate) fn dispatch(
                 *control_flow = ControlFlow::Exit;
             }
         }
-        Event::WindowEvent {
-            event: WindowEvent::ModifiersChanged(mods),
-            ..
-        } => state.modifiers = mods,
-        // The OS appearance changed: a user flipped dark mode, or a scheduled
-        // switch did it for them. tao reports it on every desktop platform and the
-        // loop ignored it, so a page that wanted to follow had to poll
-        // `matchMedia`, which is a timer doing what an event should do.
+        WindowEvent::ModifiersChanged(mods) => state.modifiers = mods,
+        // The OS appearance changed: a user flipped dark mode, or a scheduled switch
+        // did it for them. tao reports this on every desktop platform and the loop
+        // ignored it, so a page that wanted to follow had to poll `matchMedia`, which
+        // is a timer doing what an event should do.
         //
         // Emitted as `theme` rather than as a CSS class injection: the stylesheet
         // already has `prefers-color-scheme`, so a page using a media query needs
         // nothing, and one drawing to a canvas needs the value.
-        Event::WindowEvent {
-            event: WindowEvent::ThemeChanged(theme),
-            ..
-        } => state.handle.emit_to_all(
+        WindowEvent::ThemeChanged(theme) => state.handle.emit_to_all(
             "theme",
             serde_json::json!({
-                // `Theme` is `#[non_exhaustive]`, so a future variant must not be
-                // a compile error here: reporting "light" for something new is
-                // wrong, and reporting nothing is worse. The value is the name of
-                // the variant a page can switch on.
+                // `Theme` is `#[non_exhaustive]`, so a future variant must not be a
+                // compile error here: reporting "light" for something new is wrong,
+                // and reporting nothing is worse. The value is the name of the
+                // variant a page can switch on.
                 "theme": match theme {
                     tao::window::Theme::Dark => "dark",
                     _ => "light",
                 },
             }),
         ),
-        Event::WindowEvent {
-            event: WindowEvent::KeyboardInput { event: key, .. },
-            window_id,
-            ..
-        } => {
+        // A guard rather than a nested `if`: the three conditions are all
+        // preconditions for the one action, so an arm that only matches when they
+        // hold says that better than an arm that always matches and then decides.
+        WindowEvent::KeyboardInput { event: key, .. }
             if state.show_devtools
                 && key.state == ElementState::Pressed
-                && is_devtools_shortcut(key.physical_key, state.modifiers)
-            {
-                if let Some(entry) = state.open.get(&window_id) {
-                    open_devtools(&entry.webview);
-                }
+                && is_devtools_shortcut(key.physical_key, state.modifiers) =>
+        {
+            if let Some(entry) = state.open.get(&window_id) {
+                open_devtools(&entry.webview);
             }
         }
-        Event::UserEvent(UserEvent::Emit {
+        // Mobile lifecycle: tao maps the UIKit callbacks onto
+        // WindowEvent::Suspended/Resumed, and the page hears them as `lifecycle`
+        // through the same queue Android's activity callbacks use. Desktop never
+        // raises either, so this is mobile-only in practice.
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        WindowEvent::Suspended => crate::platform::lifecycle("pause"),
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        WindowEvent::Resumed => crate::platform::lifecycle("resume"),
+        _ => {}
+    }
+}
+
+/// One posted event: what another thread asked the UI thread to do.
+fn user_event(
+    state: &mut LoopState,
+    event: UserEvent,
+    event_loop: &EventLoopWindowTarget<UserEvent>,
+    control_flow: &mut ControlFlow,
+) {
+    match event {
+        UserEvent::Emit {
             label,
             event,
             payload,
-        }) => {
+        } => {
             let script = emit_script(&event, &payload);
             for entry in state.open.values() {
                 if label.as_ref().is_none_or(|l| *l == entry.label) {
@@ -132,7 +165,7 @@ pub(crate) fn dispatch(
                 }
             }
         }
-        Event::UserEvent(UserEvent::OpenWindow(options)) => {
+        UserEvent::OpenWindow(options) => {
             match windows::create_window(event_loop, &state.spec, &options, &*state.factory) {
                 Ok((id, entry)) => {
                     state.open_labels.insert(&entry.label);
@@ -148,13 +181,13 @@ pub(crate) fn dispatch(
                 }
             }
         }
-        Event::UserEvent(UserEvent::CloseWindow(label)) => {
-            if let Some(id) = state
+        UserEvent::CloseWindow(label) => {
+            let id = state
                 .open
                 .iter()
                 .find(|(_, e)| e.label == label)
-                .map(|(id, _)| *id)
-            {
+                .map(|(id, _)| *id);
+            if let Some(id) = id {
                 if let Some(entry) = state.open.remove(&id) {
                     state.open_labels.remove(&entry.label);
                     announce_close(state, &entry.label);
@@ -164,7 +197,7 @@ pub(crate) fn dispatch(
                 }
             }
         }
-        Event::UserEvent(UserEvent::Tray(id)) => {
+        UserEvent::Tray(id) => {
             state
                 .handle
                 .emit_to_all("tray", serde_json::json!({ "id": id }));
@@ -173,7 +206,7 @@ pub(crate) fn dispatch(
                 state.handle.run_command(command, Value::Null);
             }
         }
-        Event::UserEvent(UserEvent::Menu(id)) => {
+        UserEvent::Menu(id) => {
             state
                 .handle
                 .emit_to_all("menu", serde_json::json!({ "id": id }));
@@ -184,11 +217,11 @@ pub(crate) fn dispatch(
             #[cfg(not(feature = "menu"))]
             let _ = &id;
         }
-        Event::UserEvent(UserEvent::Eval { label, script }) => {
+        UserEvent::Eval { label, script } => {
             for entry in state.open.values() {
-                // A bridge reply is addressed to the window that asked: the
-                // shim's pending map and id counter are per frame, so a
-                // broadcast could settle another window's promise.
+                // A bridge reply is addressed to the window that asked: the shim's
+                // pending map and id counter are per frame, so a broadcast could
+                // settle another window's promise.
                 if label.as_ref().is_some_and(|l| *l != entry.label) {
                     continue;
                 }
@@ -198,13 +231,9 @@ pub(crate) fn dispatch(
             }
         }
         #[cfg(feature = "tray")]
-        Event::UserEvent(UserEvent::TrayUpdate(change)) => {
-            crate::live::apply_tray(state.tray.as_ref(), &change);
-        }
+        UserEvent::TrayUpdate(change) => crate::live::apply_tray(state.tray.as_ref(), &change),
         #[cfg(feature = "menu")]
-        Event::UserEvent(UserEvent::MenuUpdate(change)) => {
-            crate::live::apply_menu(state.menu.as_ref(), &change);
-        }
+        UserEvent::MenuUpdate(change) => crate::live::apply_menu(state.menu.as_ref(), &change),
         // A snapshot was requested and this window's page is loaded.
         //
         // Two passes through this match, deliberately: the page is asked about
@@ -212,7 +241,7 @@ pub(crate) fn dispatch(
         // capture and the dump cannot disagree about which window they describe.
         // Both run on this thread, which is what the GTK main-context assertion in
         // `snapshot::capture` requires.
-        Event::UserEvent(UserEvent::Snapshot(label)) => {
+        UserEvent::Snapshot(label) => {
             let Some(entry) = state.open.values().find(|e| e.label == label) else {
                 return;
             };
@@ -226,13 +255,13 @@ pub(crate) fn dispatch(
                 eprintln!("voussoir: snapshot probe failed: {error}");
             }
         }
-        Event::UserEvent(UserEvent::SnapshotProbed {
+        UserEvent::SnapshotProbed {
             label,
             width,
             height,
             scale,
             facts,
-        }) => {
+        } => {
             let Some(entry) = state.open.values().find(|e| e.label == label) else {
                 return;
             };
@@ -248,7 +277,7 @@ pub(crate) fn dispatch(
                 crate::snapshot::finish(&request, &captured, png.as_deref());
             });
         }
-        Event::UserEvent(UserEvent::Signal(signal)) => {
+        UserEvent::Signal(signal) => {
             if signal == "devtools" {
                 for entry in state.open.values() {
                     open_devtools(&entry.webview);
@@ -258,22 +287,6 @@ pub(crate) fn dispatch(
                 .handle
                 .emit_to_all("signal", serde_json::json!({ "id": signal }));
         }
-        // Mobile lifecycle: tao maps the UIKit callbacks onto
-        // WindowEvent::Suspended/Resumed, and the page hears them as
-        // `lifecycle` through the same queue Android's activity
-        // callbacks use. Desktop never raises either, so this is
-        // mobile-only in practice.
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        Event::WindowEvent {
-            event: WindowEvent::Suspended,
-            ..
-        } => crate::platform::lifecycle("pause"),
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        Event::WindowEvent {
-            event: WindowEvent::Resumed,
-            ..
-        } => crate::platform::lifecycle("resume"),
-        _ => {}
     }
 }
 

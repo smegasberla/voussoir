@@ -33,15 +33,35 @@ use serde_json::{json, Value};
 
 use crate::{Config, Error, Registry};
 
+// `fetch` compiles everywhere: a desktop TLS client, Android's
+// `HttpURLConnection`, and an honest "the App Store owns this" on iOS.
 mod fetch;
+
+// The artifact half of the updater is desktop-only work, and the store owns
+// installation on mobile. Gating the *module* rather than each item inside it is
+// what makes that one fact instead of thirty: every `pub fn` in these files used
+// to carry its own `#[cfg]`, and the ones at the top of the file — the `use`
+// statements — did not, which is how `--features full` stopped compiling for
+// Android while every desktop check stayed green.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod install;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod manifest;
 
 // Public API path, unchanged by the split: the contract test and a publisher's own
 // checks call `voussoir::updater::parse_manifest_for_contract`.
+//
+// Gated with the manifest items it re-exports, which are gated with the functions
+// that build them. An ungated `pub use` of a gated item compiles on desktop and
+// fails on Android, which is how `--features full` stopped building for mobile.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use manifest::{parse_manifest_for_contract, ParsedManifest, ParsedPatch};
 
+// `fetch` exists on every target — a desktop TLS client, Android's
+// `HttpURLConnection`, and an honest "the App Store owns this" on iOS — so the
+// import is not gated. The artifact half is, because installing is desktop work.
 use fetch::fetch;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use install::{apply_to, ProgressThrottle};
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

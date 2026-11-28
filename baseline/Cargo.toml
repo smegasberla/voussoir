@@ -3,6 +3,10 @@ name = "baseline"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# Real licence fields rather than a `deny.toml` exemption: two unpublished
+# workspace crates are still ours, and an exemption list is a place a genuinely
+# unlicensed dependency could hide.
+license = "MIT"
 
 [dependencies]
 wry = { version = "0.57", features = ["linux-body"] }

@@ -61,7 +61,7 @@ fn fetch_limited(url: &str, timeout: std::time::Duration, cap: u64) -> Result<St
 /// one has to be updated with the app, so the platform's `HttpURLConnection` is
 /// the honest choice. It blocks, which is fine: `update.check` is async.
 #[cfg(target_os = "android")]
-fn fetch(url: &str) -> Result<String, Error> {
+pub(super) fn fetch(url: &str) -> Result<String, Error> {
     crate::platform::http_get(url).ok_or_else(|| {
         Error::Handler("update check failed: no activity can make the request".to_owned())
     })
@@ -74,7 +74,7 @@ fn fetch(url: &str) -> Result<String, Error> {
 /// and the version comparison stays testable; the endpoint fetch waits for
 /// the Swift glue (IOS-PLAN Phase I-3) if a diagnostic fetch is ever wanted.
 #[cfg(target_os = "ios")]
-fn fetch(_url: &str) -> Result<String, Error> {
+pub(super) fn fetch(_url: &str) -> Result<String, Error> {
     Err(Error::Handler(
         "update checks are diagnostic on iOS; the App Store owns updates".to_owned(),
     ))

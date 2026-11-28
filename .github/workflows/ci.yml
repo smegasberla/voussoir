@@ -84,6 +84,13 @@ jobs:
       - name: No dependency tree in the framework
         run: test ! -d cli/node_modules && test ! -d promo/node_modules
 
+      # `updater` compiles on every target but only the desktop half applies.
+      # A `use` that disagrees with the item it imports builds here and fails on
+      # Android, which is how `--features full` stopped compiling for mobile
+      # while every local check stayed green. Seconds, no NDK needed.
+      - name: updater target gating
+        run: ./scripts/check-updater-gating.sh
+
       # The fuzz harness in `fuzz/` needs nightly for `-Zsanitizer=address`, so its
       # full runs are a schedule (`.github/workflows/fuzz.yml`). What has to be true
       # on every push is that it still *builds*: it was compiled by nothing for long
@@ -277,6 +284,27 @@ jobs:
           cargo check -p voussoir --target x86_64-unknown-netbsd 2>&1 | tail -20 || \
             echo "::warning::NetBSD native libs unavailable; the runtime is unverified on NetBSD"
 
+  # The cheap half of the Android job: cross-compile the crate itself, with no
+  # emulator, no Gradle and no NDK packaging. It exists because the expensive job
+  # took nine minutes to tell us `--features full` did not build for the target,
+  # and because a `cfg` mismatch should fail on the commit that caused it.
+  android-check:
+    name: Android (cross-check the crate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android,aarch64-linux-android
+      - name: Install webview and build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+      - name: Cross-check for both Android ABIs
+        run: ./scripts/check-mobile-targets.sh
+
   android:
     name: Android (build, run on emulator)
     runs-on: ubuntu-latest
@@ -400,9 +428,14 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
+      # `init` writes the `ios/` shell only when asked: shipping an Xcode project
+      # to someone who will never open it is the kind of file this project is
+      # against. So the job has to ask, which it did not — it scaffolded a
+      # desktop-and-Android app and then ran `ios build` against a directory that
+      # was never created.
       - name: Scaffold a project and build it for the simulator
         run: |
-          bun cli/src/index.ts init /tmp/app --name "CI App"
+          bun cli/src/index.ts init /tmp/app --name "CI App" --ios
           cd /tmp/app
           bun "$GITHUB_WORKSPACE/cli/src/index.ts" ios build
           ls -l ios/build/Build/Products/Debug-iphonesimulator/

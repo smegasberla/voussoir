@@ -397,7 +397,14 @@ asserted in CI. Dependency advisories, licences and sources are checked by
 The gates CI runs are `cargo test`, `bun test` in `cli/`, `scripts/verify.ts`,
 `scripts/verify-hot.ts`, and both halves of `scripts/bench.ts`. A change to the
 shell should also keep `cargo clippy --all-targets -- -D warnings` and
-`cargo fmt --all --check` clean. A bug report with a reproduction is worth more
+`cargo fmt --all --check` clean.
+
+**Run `scripts/check-mobile-targets.sh` before pushing anything that touches a
+`cfg`.** A gate that only one target evaluates is invisible on the machine you
+develop on: `--features full` compiled here for months while failing to build for
+Android, because the local host never compiles the branch that was wrong. The
+script cross-compiles both Android ABIs in seconds and says plainly that iOS is
+unverified without an Apple SDK, rather than reporting a pass it did not earn. A bug report with a reproduction is worth more
 than a feature request; this project says no to features on purpose.
 
 The numbers in this README are produced by commands CI runs, not by commands
