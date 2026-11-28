@@ -80,6 +80,30 @@ pub(crate) fn dispatch(
             event: WindowEvent::ModifiersChanged(mods),
             ..
         } => state.modifiers = mods,
+        // The OS appearance changed: a user flipped dark mode, or a scheduled
+        // switch did it for them. tao reports it on every desktop platform and the
+        // loop ignored it, so a page that wanted to follow had to poll
+        // `matchMedia`, which is a timer doing what an event should do.
+        //
+        // Emitted as `theme` rather than as a CSS class injection: the stylesheet
+        // already has `prefers-color-scheme`, so a page using a media query needs
+        // nothing, and one drawing to a canvas needs the value.
+        Event::WindowEvent {
+            event: WindowEvent::ThemeChanged(theme),
+            ..
+        } => state.handle.emit_to_all(
+            "theme",
+            serde_json::json!({
+                // `Theme` is `#[non_exhaustive]`, so a future variant must not be
+                // a compile error here: reporting "light" for something new is
+                // wrong, and reporting nothing is worse. The value is the name of
+                // the variant a page can switch on.
+                "theme": match theme {
+                    tao::window::Theme::Dark => "dark",
+                    _ => "light",
+                },
+            }),
+        ),
         Event::WindowEvent {
             event: WindowEvent::KeyboardInput { event: key, .. },
             window_id,
@@ -180,6 +204,49 @@ pub(crate) fn dispatch(
         #[cfg(feature = "menu")]
         Event::UserEvent(UserEvent::MenuUpdate(change)) => {
             crate::live::apply_menu(state.menu.as_ref(), &change);
+        }
+        // A snapshot was requested and this window's page is loaded.
+        //
+        // Two passes through this match, deliberately: the page is asked about
+        // itself first, and the pixels are captured once that answer is in, so the
+        // capture and the dump cannot disagree about which window they describe.
+        // Both run on this thread, which is what the GTK main-context assertion in
+        // `snapshot::capture` requires.
+        Event::UserEvent(UserEvent::Snapshot(label)) => {
+            let Some(entry) = state.open.values().find(|e| e.label == label) else {
+                return;
+            };
+            let window = entry.window.inner_size();
+            let scale = entry.window.scale_factor();
+            let handle = state.handle.clone();
+            let requested = label.clone();
+            if let Err(error) = crate::snapshot::probe(&entry.webview, move |facts| {
+                handle.snapshot_probed(requested, window.width, window.height, scale, facts);
+            }) {
+                eprintln!("voussoir: snapshot probe failed: {error}");
+            }
+        }
+        Event::UserEvent(UserEvent::SnapshotProbed {
+            label,
+            width,
+            height,
+            scale,
+            facts,
+        }) => {
+            let Some(entry) = state.open.values().find(|e| e.label == label) else {
+                return;
+            };
+            let request = crate::snapshot::Request::from_env();
+            let captured = crate::snapshot::Captured {
+                label: label.clone(),
+                width,
+                height,
+                scale,
+                page: facts,
+            };
+            crate::snapshot::capture(&entry.webview, move |png| {
+                crate::snapshot::finish(&request, &captured, png.as_deref());
+            });
         }
         Event::UserEvent(UserEvent::Signal(signal)) => {
             if signal == "devtools" {

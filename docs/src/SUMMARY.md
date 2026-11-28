@@ -32,6 +32,8 @@ If you read nothing else, read [Concepts](concepts.md) and then
 - [Multi-window](multi-window.md)
   - [Lifecycle hooks](lifecycle.md)
 - [Hot reload in development](hot-reload.md)
+- [Accessibility](accessibility.md)
+- [Headless tooling](headless.md)
 - [Testing](testing.md)
 - [Packaging](packaging.md)
   - [Updating the app](updater.md)

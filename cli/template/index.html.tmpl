@@ -7,14 +7,30 @@
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
+    <!--
+      The markup below is the accessibility baseline, not decoration. The webview
+      builds the OS accessibility tree from these elements, so a page is only as
+      navigable as its roles, labels and heading order:
+
+        - `<main>` is the one landmark a reader can jump to.
+        - Every form control has a `<label>`; `for`/`id` is what binds it, and an
+          input with a placeholder and no label is announced as "edit text".
+        - `<h1>` then `<h2>`, never a skipped level: the heading list is the
+          reader's table of contents.
+        - `aria-live="polite"` on the result region is what makes a command's
+          answer audible without the user hunting for it.
+        - Buttons are `<button type="...">`, so Enter and Space both activate them
+          and the role is not a guess from a click handler.
+    -->
     <main>
       <h1>{{NAME}}</h1>
       <p class="hint">A native command round-trip: TypeScript calls Rust, Rust returns data.</p>
       <form id="greet">
+        <label for="name">Name</label>
         <input id="name" value="world" autocomplete="off" spellcheck="false" />
         <button type="submit">Invoke</button>
       </form>
-      <p id="result" aria-live="polite">waiting</p>
+      <p id="result" role="status" aria-live="polite" aria-atomic="true">waiting</p>
       <div class="row">
         <button id="slow" type="button" class="ghost">Slow async task</button>
         <button id="settings" type="button" class="ghost">Open settings window</button>

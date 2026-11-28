@@ -4,9 +4,15 @@ const result = document.getElementById("result")!;
 const form = document.getElementById("greet") as HTMLFormElement;
 const nameInput = document.getElementById("name") as HTMLInputElement;
 const slowButton = document.getElementById("slow") as HTMLButtonElement;
+// The shell's accessibility surface arrived in shim protocol 4; an older shell has
+// no `a11y` at all, so this is the guard the documentation tells you to use.
+const canAnnounce = window.voussoir.protocol >= 4;
 const settingsButton = document.getElementById("settings") as HTMLButtonElement;
 
 function show(text: string) {
+  // The result region is `role="status" aria-live="polite"`, so replacing its text
+  // is what makes the answer audible. No separate announcement: two live regions
+  // for one change is how a screen reader ends up saying everything twice.
   result.textContent = text;
 }
 
@@ -31,6 +37,9 @@ slowButton.addEventListener("click", async () => {
     show("error: " + (error as Error).message);
   } finally {
     slowButton.disabled = false;
+    // No element on screen says "the background work is over", so tell the
+    // reader directly rather than relying on a button label changing.
+    if (canAnnounce) window.voussoir.a11y.announce("async task finished");
   }
 });
 
@@ -52,6 +61,9 @@ settingsButton.addEventListener("dblclick", async () => {
   show(`settings last opened at ${saved ?? "never"}`);
 });
 
+// A change the user cannot see — a background task finished, settings saved — is
+// what `announce` is for. The result region above speaks on its own; this covers
+// the case where there is no element to update.
 // Menu clicks arrive as events, so a native menu needs no extra wiring here.
 window.voussoir.listen<{ id: string }>("menu", (event) => show(`menu: ${event.id}`));
 
@@ -63,5 +75,10 @@ window.voussoir.listen<{ state: string }>("lifecycle", ({ state }) => {
   if (state === "resume") return;
   show(`lifecycle: ${state}`);
 });
+
+// Respect the reader's motion setting in one place. The stylesheet already turns
+// transitions off; this is for anything scripted, and the shim exposes the value
+// because a page drawing to a `<canvas>` has no media query to consult.
+const motion = window.voussoir.a11y?.prefers() ?? { reducedMotion: false };
 
 form.requestSubmit();

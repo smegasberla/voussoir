@@ -223,7 +223,8 @@ and asserts:
 - navigation away from the app is refused,
 - a panicking handler returns `kind: "panic"` and the window survives,
 - the storage round-trip works,
-- a narrowed window is denied.
+- a narrowed window is denied,
+- the snapshot path writes a PNG and a dump whose `bridge` is true.
 
 Run it locally:
 
@@ -277,7 +278,8 @@ function fakeVoussoir(replies: Record<string, unknown>) {
     menu: {},
     platform: "linux" as const,
     pageOrigin: "voussoir://localhost",
-    protocol: 3,
+    a11y: { announce: () => {}, prefers: () => ({ reducedMotion: false, dark: false, highContrast: false }), onPrefersChange: () => () => {} },
+    protocol: 4,
     timeout: 30000,
   };
 }
@@ -303,6 +305,8 @@ mystery `undefined` in one test.
 | CLI tests | `bun test` in `cli/` | scaffolder, docs check, dev server helpers |
 | End to end | `bun scripts/verify.ts` | the real transport, policy, panic path |
 | Hot reload | `bun scripts/verify-hot.ts` | the swap, and no `libloading` in release |
+| Snapshot | `voussoir run --snap` (inside `verify.ts`) | the page rendered, at the right size, with the bridge up |
+| A11y markup | `bun test` in `cli/` | a control with no name, a skipped heading, no landmark |
 | Cold start | `bun scripts/bench.ts` | startup regressions, against a control binary |
 | Dispatch | `bun scripts/bench.ts --dispatch` | a runtime that stopped paying for itself |
 | Fuzz build | `cargo +nightly check --manifest-path fuzz/Cargo.toml` | a harness that stopped compiling |

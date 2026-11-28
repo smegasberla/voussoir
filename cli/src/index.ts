@@ -14,6 +14,7 @@ import { CLI_VERSION, update } from "./commands/update.ts";
 import { init } from "./commands/init.ts";
 import { dev } from "./commands/dev.ts";
 import { build } from "./commands/build.ts";
+import { run } from "./commands/run.ts";
 import { doctor } from "./commands/doctor.ts";
 import { docs } from "./commands/docs.ts";
 import { runPackage } from "./commands/package.ts";
@@ -29,6 +30,7 @@ Commands
   init [dir]     scaffold a new app (default: current directory)
   dev            run the Bun dev server and launch the shell against it
   build          bundle the frontend and compile the release binary
+  run            boot the built app; --snap writes a PNG and --dump a JSON description
   package        build, then wrap the binary in a platform installer
   android build  cross-compile and package an APK (or AAB with --aab)
   keygen         create the Ed25519 key that signs releases
@@ -51,6 +53,9 @@ Options
   --debug        build: cargo debug profile instead of release
   --size         build: print the binary size
   --out <path>   build: copy the binary somewhere, creating its parent
+  --snap <path>  run: capture the first window to a PNG, then exit
+  --dump <path>  run: write a JSON description of the window and the page
+  --timeout <ms> run: how long to wait for the capture (default 30000)
   --wait         android run: keep streaming device logs until Ctrl-C
   --key <path>   sign: the Ed25519 private key (default voussoir-signing-key.pem)
   --out <path>   keygen: where to write the private key
@@ -116,6 +121,30 @@ Usage
 Options
   --port <n>       dev server port (default 5177)
   --verbose        record reloads, slow commands and refused navigations
+`,
+  run: `voussoir run - boot the built app once
+
+Usage
+  voussoir run --snap <path> [--dump <path>]
+
+  Boots the binary "voussoir build" produced, waits for the first window's page
+  to finish loading, writes the capture, and exits. It does not build: a run that
+  compiled would report a layout from a binary you did not know had changed.
+
+  The capture needs a display. On a headless box, run it under a virtual one:
+
+    xvfb-run -a voussoir run --snap out.png
+
+  Without a display the shell cannot draw, so this fails rather than writing an
+  empty PNG. --dump needs no display, and answers most questions on its own:
+  the window label, its measured size, the platform, the page's real origin, the
+  shim protocol, and whether the bridge installed inside the page.
+
+Options
+  --snap <path>    PNG of the first window
+  --dump <path>    JSON description of the window and its page
+  --timeout <ms>   how long to wait for the capture (default 30000)
+  --json           also print the dump to stdout
 `,
   build: `voussoir build - bundle the frontend and compile the release binary
 
@@ -285,6 +314,7 @@ const FLAGS: Record<string, string[]> = {
   init: ["name", "package", "desktop", "mobile", "ios", "force"],
   dev: ["port", "verbose"],
   build: ["debug", "size", "out"],
+  run: ["snap", "dump", "json", "timeout"],
   package: ["icon", "identifier", "debug"],
   doctor: ["json"],
   docs: ["check"],
@@ -407,6 +437,9 @@ switch (args.command) {
     break;
   case "build":
     code = await build(args);
+    break;
+  case "run":
+    code = await run(args);
     break;
   case "doctor":
     code = await doctor(args);

@@ -58,6 +58,17 @@ futures-util = { version = "0.3", optional = true }
 # same crate instance, so it adds no build time and no code to the binary.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
 gtk = "0.18"
+# Named for the same reason gtk is: `VOUSSOIR_SNAPSHOT` captures through
+# `WebKitWebView::snapshot`, which is a method on the webkit2gtk type that wry
+# hands back, so the type has to be nameable here. Already in the tree through
+# wry, and pinned to the same version wry pins (`=2.0.2`) so this declaration
+# dedupes to the instance that already exists rather than building a second one.
+webkit2gtk = "=2.0.2"
+# `png` is the feature that puts `write_to_png` on `cairo::Surface`, which is how a
+# captured `snapshot` becomes bytes. Declared here to switch the feature on the
+# instance gtk already depends on, rather than to pull in a second copy: cairo-rs is
+# in the tree through gtk either way.
+cairo-rs = { version = "0.18", features = ["png"] }
 
 
 [features]

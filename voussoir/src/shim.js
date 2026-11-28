@@ -215,6 +215,90 @@
     checked: (id, checked) => invoke("__voussoir_menu_checked", { id, checked }),
   };
 
+  // One live region the shell owns, so an app can say "this changed" without
+  // hand-rolling `aria-live` in every component.
+  //
+  // Screen readers announce a live region only when its text *changes*, so the
+  // text is cleared and set on separate turns: setting the same message twice in
+  // a row is a common "nothing happened" bug, and an empty-then-set is what makes
+  // the second occurrence audible.
+  //
+  // Visually hidden rather than `display: none`, because a hidden element has no
+  // accessibility node at all and a screen reader would never read it.
+  function liveRegion() {
+    let node = document.getElementById("__voussoir_status");
+    if (node) return node;
+    node = document.createElement("div");
+    node.id = "__voussoir_status";
+    node.setAttribute("role", "status");
+    node.setAttribute("aria-live", "polite");
+    node.setAttribute("aria-atomic", "true");
+    node.style.cssText =
+      "position:absolute;width:1px;height:1px;margin:-1px;padding:0;" +
+      "overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0";
+    (document.body || document.documentElement).appendChild(node);
+    return node;
+  }
+
+  function announce(message) {
+    const text = message === undefined || message === null ? "" : String(message);
+    const say = () => {
+      const node = liveRegion();
+      node.textContent = "";
+      // Two turns, not one: a reader only speaks a *change*, and clearing and
+      // setting in the same task collapses into one mutation it may not announce.
+      setTimeout(() => {
+        node.textContent = text;
+      }, 30);
+    };
+    if (document.body) say();
+    else document.addEventListener("DOMContentLoaded", say, { once: true });
+  }
+
+  // What the operating system says about the reader. `prefers-reduced-motion` and
+  // `prefers-contrast` are the two a webview already answers through CSS, but an
+  // app that draws to a canvas cannot use a media query and needs the value.
+  function prefers() {
+    const query = (q) => {
+      try {
+        return typeof matchMedia === "function" ? matchMedia(q).matches : false;
+      } catch {
+        return false;
+      }
+    };
+    return {
+      reducedMotion: query("(prefers-reduced-motion: reduce)"),
+      dark: query("(prefers-color-scheme: dark)"),
+      highContrast: query("(prefers-contrast: more)") || query("(forced-colors: active)"),
+    };
+  }
+
+  // Reading the *current* answer, not the one at load: a user can turn reduce-
+  // motion on while the app is open, and `prefers()` is cheap enough to re-call.
+  function onPrefersChange(fn) {
+    if (typeof matchMedia !== "function") return () => {};
+    const queries = [
+      "(prefers-reduced-motion: reduce)",
+      "(prefers-color-scheme: dark)",
+      "(prefers-contrast: more)",
+      "(forced-colors: active)",
+    ];
+    const handlers = [];
+    for (const q of queries) {
+      try {
+        const list = matchMedia(q);
+        const handler = () => fn(prefers());
+        list.addEventListener("change", handler);
+        handlers.push(() => list.removeEventListener("change", handler));
+      } catch {
+        // A engine without `change` support still answers `prefers()` on demand.
+      }
+    }
+    return () => {
+      for (const off of handlers) off();
+    };
+  }
+
   // The page is shared across platforms, so it needs to know which one it is on.
   // Injected at build time rather than sniffed: a WebView user-agent lies more
   // often than it helps.
@@ -227,6 +311,9 @@
     windows,
     tray,
     menu,
+    // Accessibility and reader settings, in one namespace so a page feature-
+    // detects with `protocol >= 4` rather than probing for members.
+    a11y: { announce, prefers, onPrefersChange },
     platform: "__PLATFORM__",
     // The origin this page is actually served from. On Windows it is the
     // rewritten host form, because WebView2 cannot intercept a custom scheme, so

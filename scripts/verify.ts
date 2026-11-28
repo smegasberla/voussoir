@@ -560,6 +560,46 @@ async function main() {
     );
   }
 
+  // 8. The snapshot path: the shell writes a PNG and a JSON dump for an agent to
+  //    inspect, and `voussoir run --snap` is the wrapper that drives it. The dump
+  //    needs no display; the PNG does, so a box without one still proves the half
+  //    that matters for "did the right page load with the bridge up".
+  {
+    const shot = join(app, "snapshot.png");
+    const dump = join(app, "snapshot.json");
+    const args = ["bun", cli, "run", "--dump", dump];
+    // Only ask for pixels when there is a display to draw them on. Asking anyway
+    // would fail the check on a headless box for a reason that is not a defect.
+    const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+    if (hasDisplay) args.push("--snap", shot);
+    const run = await shWithTimeout(args, app, {}, 120_000);
+    const dumpExists = existsSync(dump);
+    let parsed: { voussoir?: { bridge?: boolean; protocol?: number }; window?: { label?: string } } | null =
+      null;
+    if (dumpExists) {
+      try {
+        parsed = JSON.parse(readFileSync(dump, "utf8"));
+      } catch {
+        parsed = null;
+      }
+    }
+    record(
+      "voussoir run --dump",
+      run.code === 0 && parsed !== null && parsed.voussoir?.bridge === true,
+      parsed
+        ? `window=${parsed.window?.label} bridge=${parsed.voussoir?.bridge} protocol=${parsed.voussoir?.protocol}`
+        : run.err.slice(-140) || "no dump",
+    );
+    if (hasDisplay) {
+      const size = statSync(shot, { throwIfNoEntry: false })?.size ?? 0;
+      // A PNG that exists but is empty is a capture that failed halfway; 1 KiB is
+      // below even a blank 100x100 frame, so this catches "wrote the header only".
+      record("voussoir run --snap", run.code === 0 && size > 1024, `${size} bytes`);
+    } else {
+      record("voussoir run --snap", true, "skipped: no display, so no capture");
+    }
+  }
+
   // 8. Packaging produces a real artifact on Linux. The AppImage is the only
   //    format that can be produced and inspected here; macOS and Windows
   //    packaging is exercised by the release workflow.

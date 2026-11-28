@@ -363,6 +363,28 @@ The book in `docs/src` is the narrative version: installing, your first app,
 CI, and `voussoir docs` renders the same files into `website/dist`. The published
 copy is at **https://voussoir-app.pages.dev**.
 
+## Portable by default, inspectable on demand
+
+```bash
+voussoir run --snap shot.png --dump shot.json
+```
+
+The shell writes a PNG of the first window and a JSON description of it — the
+measured size, the device scale, the platform, the page's real origin, the shim
+protocol, and whether the bridge installed *inside the page*. An agent, or a CI
+job, can then answer "did the right page load, on the right platform, with the
+bridge up" without anyone looking at a window.
+
+The capture needs a display, because the engine draws into the widget it was given
+and a window that was never shown has nothing to capture. `xvfb-run` supplies one,
+which is what CI does. The dump needs nothing.
+
+The page half of accessibility comes from the engine's tree, so it is only as good
+as the markup; `voussoir doctor` reads the entry HTML and reports the three defects
+that actually ship. What markup cannot express is `voussoir.a11y`: an announcement
+for a change with no element behind it, and the reader's motion and contrast
+settings for a page drawing to a canvas.
+
 ## Security
 
 Report a vulnerability privately: see [SECURITY.md](SECURITY.md). That file also

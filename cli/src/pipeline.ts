@@ -125,8 +125,12 @@ export async function cargoBuild(project: Project, release: boolean): Promise<st
   return bin;
 }
 
-/** The crate's binary name, read from Cargo.toml to avoid guessing. */
-function binaryName(crate: string): string {
+/** The crate's binary name, read from Cargo.toml to avoid guessing.
+ *
+ *  Exported because `voussoir run` has to find the same binary this build wrote:
+ *  a scaffold named after the app and a package named `app` are both real, and
+ *  guessing `app` is wrong half the time. */
+export function binaryName(crate: string): string {
   const manifest = readFileSync(join(crate, "Cargo.toml"), "utf8");
   const named = /\[\[bin\]\][\s\S]*?name\s*=\s*"([^"]+)"/.exec(manifest);
   if (named) return named[1]!;

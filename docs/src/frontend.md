@@ -24,6 +24,7 @@ What it costs, stated plainly:
 | one layout for every OS | pixel-identical rendering across engines |
 | every CSS technique on the web | the "real native widget" feel some users expect |
 | hot reload in development | a browser with navigation, tabs, or cookies |
+| the engine's accessibility tree | only as good as your markup — see [Accessibility](accessibility.md) |
 | TypeScript for the UI | any Node.js API in the page |
 
 The last row of the right column is the one that surprises people, and it is

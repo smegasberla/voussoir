@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { boolFlag, type Args } from "../args.ts";
+import { checkFile } from "../a11y.ts";
 import { findProject } from "../project.ts";
 
 /** `note` is neither a pass nor a failure: the project check has no answer
@@ -99,6 +100,21 @@ export async function doctor(args: Args): Promise<number> {
       ok: existsSync(manifest),
       detail: existsSync(manifest) ? "native/Cargo.toml" : "missing: native/Cargo.toml",
     });
+
+    // Accessibility of the markup, because the webview's tree is built from it and
+    // a missing label is invisible until a reader hits it. A finding is a note
+    // rather than a failure: an app can be shipping and still have one, and
+    // `doctor` reports rather than blocks. It is not silent, either.
+    const findings = checkFile(entry);
+    checks.push({
+      name: "a11y markup",
+      ok: findings.length === 0,
+      note: findings.length > 0,
+      detail:
+        findings.length === 0
+          ? "labelled controls, ordered headings, a landmark"
+          : `${findings.length} finding(s): ${findings.map((f) => f.rule).join(", ")}`,
+    });
   }
 
   if (boolFlag(args, "json")) {
@@ -110,6 +126,15 @@ export async function doctor(args: Args): Promise<number> {
     }
     if (!project) {
       console.log("\nNext: voussoir init         # scaffold an app in this directory");
+    }
+    // The findings themselves, with a line number, only when there are some: a
+    // green run should stay one line long.
+    const a11y = checks.find((check) => check.name === "a11y markup");
+    if (project && a11y && !a11y.ok) {
+      console.log("");
+      for (const finding of checkFile(join(project.root, project.config.entry))) {
+        console.log(`  ${project.config.entry}:${finding.line}  ${finding.message}`);
+      }
     }
   }
 

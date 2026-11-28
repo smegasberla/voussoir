@@ -61,6 +61,7 @@ pub mod plugin;
 mod reporting;
 mod security;
 mod shell;
+mod snapshot;
 pub mod transport;
 
 pub mod windows;
@@ -140,7 +141,12 @@ pub const SCHEME: &str = "voussoir";
 ///
 /// 3 added `pageOrigin`, so a page that wants the real spelling of its own origin
 /// asks `protocol >= 3` and falls back to a relative URL on an older shell.
-pub const SHIM_PROTOCOL: u32 = 3;
+///
+/// 4 added `a11y`: `announce`, `prefers` and `onPrefersChange`. A page that wants
+/// to tell a screen reader something asks `protocol >= 4` and otherwise keeps its
+/// own live region, which is the only correct fallback — a silent change is worse
+/// than a hand-rolled one.
+pub const SHIM_PROTOCOL: u32 = 4;
 
 #[cfg(test)]
 mod tests;

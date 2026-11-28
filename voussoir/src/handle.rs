@@ -41,6 +41,23 @@ pub(crate) enum UserEvent {
         label: Option<String>,
         script: String,
     },
+    /// The page of `label` finished loading and a snapshot was requested. The
+    /// loop probes the page, then asks for the pixels, then writes both files.
+    ///
+    /// A user event rather than a direct call because the capture has to run on
+    /// the same main context that delivers its result: doing it inside the
+    /// page-load callback would wait on a loop that is already blocked on us.
+    Snapshot(String),
+    /// The probe answered: the window's measured size and what its page said.
+    /// Separate from [`UserEvent::Snapshot`] so the capture starts from a value
+    /// that already knows which window it belongs to.
+    SnapshotProbed {
+        label: String,
+        width: u32,
+        height: u32,
+        scale: f64,
+        facts: crate::snapshot::PageFacts,
+    },
 }
 /// A handle passed to command handlers. Cheap to clone, safe to send to other
 /// threads, and the only way to push data into the page or open a window.
@@ -100,6 +117,36 @@ impl AppHandle {
     /// requested, which is what lets a page open one and immediately address it.
     pub fn windows(&self) -> Vec<String> {
         self.open.labels()
+    }
+
+    /// Ask the loop to capture the window `label` and write the snapshot files.
+    ///
+    /// Internal: the two environment variables are the only public switch, and an
+    /// app that wants a capture at a chosen moment should ask for the feature
+    /// rather than reach for this. A no-op when no event loop is attached, so a
+    /// detached handle in a test cannot panic here.
+    pub(crate) fn request_snapshot(&self, label: &str) {
+        let Some(proxy) = &self.proxy else { return };
+        let _ = proxy.send_event(UserEvent::Snapshot(label.to_owned()));
+    }
+
+    /// Hand the probe's answer back to the loop, which is where the capture runs.
+    pub(crate) fn snapshot_probed(
+        &self,
+        label: String,
+        width: u32,
+        height: u32,
+        scale: f64,
+        facts: crate::snapshot::PageFacts,
+    ) {
+        let Some(proxy) = &self.proxy else { return };
+        let _ = proxy.send_event(UserEvent::SnapshotProbed {
+            label,
+            width,
+            height,
+            scale,
+            facts,
+        });
     }
 
     /// Send an event to every window, invoking `voussoir.listen(event, fn)`.

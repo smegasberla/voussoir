@@ -71,7 +71,14 @@ if (window.voussoir.protocol >= 2) {
 if (window.voussoir.protocol >= 3) {
   const base = window.voussoir.pageOrigin;
 }
+if (window.voussoir.protocol >= 4) {
+  window.voussoir.a11y.announce("saved");
+}
 ```
+
+The current protocol is **4**, and the bump is documented in `CHANGELOG.md` with
+what each version added: 2 added `windows`, `tray` and `menu`; 3 added
+`pageOrigin`; 4 added `a11y`.
 
 - **Protocol 2** added `windows()`, `tray` and `menu`.
 - **Protocol 3** added `pageOrigin`.

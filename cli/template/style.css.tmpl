@@ -21,6 +21,44 @@
   box-sizing: border-box;
 }
 
+/* The reader's own settings, honoured by the scaffold so an app starts correct.
+   `prefers-reduced-motion` is the one that matters most: a spring animation is
+   the first thing that makes an app unusable for someone with vestibular
+   sensitivity, and it costs three lines to respect. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Forced colours: the OS is overriding the palette, so stop fighting it. */
+@media (forced-colors: active) {
+  button,
+  input {
+    border: 1px solid ButtonBorder;
+  }
+}
+
+/* Visible in a browser but absent from the accessibility tree is the wrong way
+   round; this hides from sight only. The shell's own live region uses the same
+   technique, so a page that adds its own behaves identically. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -40,18 +78,41 @@ h1 {
   margin: 0 0 0.25rem;
   font-size: 1.75rem;
   letter-spacing: -0.02em;
+  /* Keeps a long title from breaking as "Hello," / "Voussoir"; the browser picks
+     the least ragged pair of lines instead of filling the first. */
+  text-wrap: balance;
 }
 
 .hint {
   margin: 0;
   color: var(--muted);
   font-size: 0.85rem;
+  /* Avoids a single trailing word on its own line, which is the tell of a layout
+     that was never looked at. */
+  text-wrap: pretty;
+}
+
+/* Tabular figures wherever numbers line up in a column, so digits do not jitter
+   as a value changes. */
+#result {
+  font-variant-numeric: tabular-nums;
 }
 
 form {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
   margin: 1.75rem 0 1rem;
+}
+
+/* The label is for the reader and the layout: a control with no visible name is
+   harder to fill in for everyone, not only for a screen reader. */
+form label {
+  flex-basis: 100%;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 input {

@@ -56,6 +56,7 @@ Three rules:
 | `init [dir]` | scaffold a new app | Rust, Bun, webview |
 | `dev` | dev server plus shell against it | the above |
 | `build` | bundle the frontend, compile the binary | the above |
+| `run` | boot the built binary; `--snap` and `--dump` capture it and exit | the above, and a display for `--snap` |
 | `package` | build, then wrap it in a platform artifact | the above, plus platform tools |
 | `android build` | cross-compile and package an APK or AAB | NDK, SDK, JDK |
 | `android run` | install and launch on a device; `--wait` keeps its logs attached | `adb`, a device |
@@ -154,6 +155,67 @@ ship it, and do not compare its size to a release build.
 
 **`--out` exists for CI**, so a workflow that uploads an artifact does not need to
 know the target triple's path layout.
+
+## `run`
+
+```bash
+voussoir run --snap shot.png
+voussoir run --snap shot.png --dump shot.json
+xvfb-run -a voussoir run --snap shot.png     # no display attached
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--snap <path>` | write a PNG of the first window, then exit |
+| `--dump <path>` | write a JSON description of the window and its page |
+| `--timeout <ms>` | how long to wait for the capture (default 30000) |
+| `--json` | also print the dump to stdout |
+
+Boots the binary `build` produced and captures it. This exists so an agent — or a
+CI job — can answer "did the right page load, on the right platform, with the
+bridge up" without a human looking at a window.
+
+**It does not build.** The loop it serves is edit, build, look; hiding the build
+inside the look would let a stale binary report a layout you did not just write.
+Run `voussoir build` first, which is what the error says when the binary is
+missing.
+
+**A capture needs a display.** The engine draws into the widget it was given, so
+there is no display-free path to pixels: measured on `webkit2gtk`, a window that
+was never shown has a zero-size webview and `snapshot()` fails on it. Use
+`xvfb-run`, which is what CI does. `--dump` has no such requirement and answers
+most questions on its own.
+
+The dump is small on purpose, and it is not an element tree — this shell does not
+own one, and a dump that invented a tree would be a second source of truth beside
+the DOM:
+
+```json
+{
+  "window": { "label": "index.html", "title": "Hello Voussoir",
+              "width": 933, "height": 487, "scale": 1.0 },
+  "voussoir": { "platform": "linux", "pageOrigin": "voussoir://localhost",
+                "protocol": 4, "version": "0.1.0", "bridge": true,
+                "reported": { "protocol": 4, "platform": "linux",
+                              "pageOrigin": "voussoir://localhost" } },
+  "error": null
+}
+```
+
+`voussoir.bridge` and everything under `reported` come **from inside the page**,
+not from Rust. That is the point: the shim installs per frame, so an origin it
+refused looks exactly like a working shell from out here, and only the page can
+tell you which happened.
+
+`run` prints one line, so a driver waits for it instead of sleeping:
+
+```
+VOUSSOIR_SNAPSHOT window=index.html png=/tmp/shot.png dump=/tmp/shot.json bridge=true
+```
+
+Exit code 1 means something that was asked for could not be produced — a capture on
+a platform with no capture path, or an unwritable directory — rather than a file to
+retry.
 
 ## `package`
 

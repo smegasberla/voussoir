@@ -502,15 +502,16 @@ impl Shell {
         // Debug builds always have devtools; a release build gets them only with the
         // `devtools` feature (or `full`).
         let show_devtools = app.want_devtools || cfg!(debug_assertions);
-        let factory = build_factory(
-            Arc::clone(&registry),
-            handle.clone(),
-            app.assets,
-            app.dev_url.clone(),
-            app.ready.map(Arc::new),
-            show_devtools,
-            config.command_timeout_ms,
-        );
+        let factory = build_factory(crate::shell::FactoryParts {
+            registry: Arc::clone(&registry),
+            handle: handle.clone(),
+            assets: app.assets,
+            dev_origin: app.dev_url.clone(),
+            ready: app.ready.map(Arc::new),
+            devtools: show_devtools,
+            command_timeout_ms: config.command_timeout_ms,
+            snapshot: crate::snapshot::Request::from_env(),
+        });
 
         // The app's own window uses the app's own surface: a narrower allowlist is
         // something a command asks for when it opens a window itself. The label

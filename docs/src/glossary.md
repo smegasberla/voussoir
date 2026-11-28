@@ -41,11 +41,15 @@ get a reply.
 **Listen** — the page-side subscription: `window.voussoir.listen(event, fn)`.
 
 **Shim** — the small JavaScript object the shell injects as `window.voussoir`. It
-carries `invoke`, `listen`, `windows`, `tray`, `menu`, `platform`, `pageOrigin`,
-`timeout` and `protocol`.
+carries `invoke`, `listen`, `windows`, `tray`, `menu`, `a11y`, `platform`,
+`pageOrigin`, `timeout` and `protocol`.
 
 **Shim protocol** — the version of the shim object, independent of the crate
-version. Currently 3. See [Compatibility policy](compatibility.md).
+version. Currently 4. See [Compatibility policy](compatibility.md).
+
+**Snapshot** — a PNG capture plus a JSON description of the first window, written
+by `voussoir run --snap` / `--dump` so an agent or a CI job can inspect a rendered
+app. See [Headless tooling](headless.md).
 
 **Transport** — how an envelope physically travels. A custom scheme on desktop and
 iOS, `postMessage` on Android. Never something app code names.

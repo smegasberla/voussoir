@@ -18,8 +18,28 @@ declare global {
       /** The shim protocol this shell implements, not its package version.
        *  Feature-detect with `voussoir.protocol >= N` and degrade in one place
        *  instead of probing for methods. 2 adds `windows`, `tray` and `menu`;
-       *  3 adds `pageOrigin`. */
+       *  3 adds `pageOrigin`; 4 adds `a11y`. */
       protocol: number;
+      /** The screen-reader surface. The webview builds the accessibility tree
+       *  from your markup, so this is only what markup cannot express: an
+       *  announcement, and the reader settings that are not a CSS media query. */
+      a11y: {
+        /** Tell a screen reader that something changed. Politeness is "polite":
+         *  it waits for the reader to finish the current sentence rather than
+         *  interrupting. Pass "" to clear without speaking.
+         *
+         *  This is not a substitute for markup: an element with the right role
+         *  and label is announced when it is focused. Use this for a change the
+         *  user cannot see — "3 results", "saved". */
+        announce(message: string): void;
+        /** What the reader's system settings are, read now rather than at load.
+         *  `reducedMotion` is also a CSS media query; these members exist because
+         *  a page drawing to a `<canvas>` cannot use one. */
+        prefers(): { reducedMotion: boolean; dark: boolean; highContrast: boolean };
+        /** Call `fn` when any of those settings change. Returns an unsubscribe
+         *  function. A user can turn reduce-motion on while the app is open. */
+        onPrefersChange(fn: (prefs: { reducedMotion: boolean; dark: boolean; highContrast: boolean }) => void): () => void;
+      };
       /** The open window labels, in the order they opened. Ask it instead of
        *  remembering every label the page ever requested. */
       windows(): Promise<string[]>;

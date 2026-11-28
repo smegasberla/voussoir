@@ -81,20 +81,42 @@ pub(crate) fn print_latency_summary(registry: &Registry) {
     }
 }
 
+/// Everything the webview factory closes over.
+///
+/// A struct rather than eight positional arguments: they are read as a set ("what a
+/// window is built from"), and a call site that grew a ninth argument would be a
+/// silent reordering hazard for whoever added it.
+pub(crate) struct FactoryParts {
+    pub(crate) registry: Arc<Registry>,
+    pub(crate) handle: AppHandle,
+    pub(crate) assets: AssetTable,
+    pub(crate) dev_origin: Option<String>,
+    pub(crate) ready: Option<Arc<ReadyHook>>,
+    pub(crate) devtools: bool,
+    pub(crate) command_timeout_ms: u64,
+    pub(crate) snapshot: crate::snapshot::Request,
+}
+
 /// Assemble the closure that builds a webview for any target URL.
-pub(crate) fn build_factory(
-    registry: Arc<Registry>,
-    handle: AppHandle,
-    assets: AssetTable,
-    dev_origin: Option<String>,
-    ready: Option<Arc<ReadyHook>>,
-    devtools: bool,
-    command_timeout_ms: u64,
-) -> BuilderFactory {
+pub(crate) fn build_factory(parts: FactoryParts) -> BuilderFactory {
+    let FactoryParts {
+        registry,
+        handle,
+        assets,
+        dev_origin,
+        ready,
+        devtools,
+        command_timeout_ms,
+        snapshot,
+    } = parts;
     // Shared by every window this factory builds: a window's page can finish
     // loading more than once (a reload), and the hook is once per window.
     let fired = Arc::new(Fired::default());
     let shim = build_shim_with(dev_origin.as_deref(), command_timeout_ms);
+    // One capture per run, decided here rather than per window: the request comes
+    // from the environment and describes the run.
+    let snapshot_request = Arc::new(snapshot);
+    let snapshot_taken = Arc::new(std::sync::atomic::AtomicBool::new(false));
     Arc::new(move |target: String, label: Option<String>| {
         // Taken before the protocol handler moves `label` into its own closure:
         // the ready hook needs the same name and the two cannot share it.
@@ -155,6 +177,14 @@ pub(crate) fn build_factory(
             })
             .with_url(target);
 
+        // A snapshot is requested once per run, so only the first window that
+        // finishes loading asks for one. `claim` is what makes "the first" true
+        // across windows without a lock held for the whole page load.
+        let snapshot = Arc::clone(&snapshot_request);
+        let snapshot_taken = Arc::clone(&snapshot_taken);
+        let snapshot_handle = handle.clone();
+        let snapshot_label = page_label.clone();
+
         match &ready {
             Some(ready) => {
                 let ready = Arc::clone(ready);
@@ -166,15 +196,27 @@ pub(crate) fn build_factory(
                         if fired.first_ready(&page_label) {
                             ready(&handle, &page_label);
                         }
+                        request_snapshot(
+                            &snapshot,
+                            &snapshot_taken,
+                            &snapshot_handle,
+                            &snapshot_label,
+                        );
                     }
                 })
             }
             // Without a ready hook the handler still has work: a lifecycle state
             // reported before the page could run a script is queued, and this is
             // the moment it can be delivered.
-            None => builder.with_on_page_load_handler(|event, _url| {
+            None => builder.with_on_page_load_handler(move |event, _url| {
                 if matches!(event, wry::PageLoadEvent::Finished) {
                     platform::page_loaded();
+                    request_snapshot(
+                        &snapshot,
+                        &snapshot_taken,
+                        &snapshot_handle,
+                        &snapshot_label,
+                    );
                 }
             }),
         }
@@ -278,6 +320,31 @@ pub(crate) fn is_devtools_shortcut(key: KeyCode, modifiers: ModifiersState) -> b
         let _ = modifiers;
         key == KeyCode::F12
     }
+}
+
+/// Ask the loop to capture this window, if the run wants a capture and has not
+/// already taken one.
+///
+/// Deliberately not done here: a capture completes on the main context, so doing
+/// it inside this callback would wait on the loop that has to deliver the
+/// result. The event hands the work to the loop instead.
+fn request_snapshot(
+    request: &Arc<crate::snapshot::Request>,
+    taken: &Arc<std::sync::atomic::AtomicBool>,
+    handle: &AppHandle,
+    label: &str,
+) {
+    if !request.is_wanted() {
+        return;
+    }
+    // `swap` rather than `load`: two windows can finish loading, and the second
+    // must not report itself as the first capture.
+    if taken.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    // `label` is the window the callback runs for, so the capture names the
+    // window that actually finished rather than whichever opens first.
+    handle.request_snapshot(label);
 }
 
 /// Attach a webview to a window.

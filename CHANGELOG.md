@@ -7,7 +7,51 @@ described under [Compatibility](../README.md#compatibility) in the README.
 
 ## [Unreleased]
 
+### Added
+
+- `VOUSSOIR_SNAPSHOT=<path>` and `VOUSSOIR_DUMP=<path>`: the shell captures the
+  first window's first finished page load to a PNG and/or writes a JSON
+  description of it, then exits. `voussoir run --snap` / `--dump` is the wrapper
+  that sets them and waits. Both are unset in every normal run, so a release
+  binary carries the code and never takes the branch.
+
+  The capture is Linux and the BSDs only, because that is where the engine exposes
+  one (`webkit2gtk`'s `snapshot` through cairo). Requesting a PNG on a platform
+  without a capture exits non-zero and says so rather than writing a black frame
+  that looks like success. The dump works everywhere, and its `voussoir.bridge`
+  field is read from the page, so a shim that refused an origin is visible instead
+  of looking like a healthy shell from Rust.
+
+- `voussoir.a11y`: `announce(message)`, `prefers()` and `onPrefersChange(fn)`, and
+  shim protocol 4. `announce` writes to a live region the shell owns, hidden from
+  sight with the clip technique rather than `display: none`, because a hidden
+  element has no accessibility node at all. It clears before it sets, so the same
+  message twice in a row is still spoken. `prefers` reports the reader's
+  reduced-motion, dark-mode and contrast settings for the case CSS cannot reach:
+  a page drawing to a canvas.
+
+- `voussoir doctor` checks the entry HTML for the three defects that ship in
+  hand-written frontends — a control with no accessible name, a skipped heading
+  level, no `<main>` landmark — and prints them with a line number. A finding is a
+  note rather than a failure, because an app can be useful and still have one.
+
+- `WindowEvent::ThemeChanged` is handled. The loop ignored it, so a page that
+  wanted to follow the OS appearance had to poll `matchMedia`; it now arrives as a
+  `theme` event with `{ "theme": "dark" | "light" }`.
+
 ### Changed
+
+- The scaffold's markup is the accessibility baseline rather than a demo: a
+  `<main>` landmark, a real `<label>` for the input, `role="status"` and
+  `aria-live` on the region a command's answer lands in. The stylesheet honours
+  `prefers-reduced-motion` and `forced-colors`, and uses `text-wrap: balance` on
+  the heading and `pretty` on the paragraph — the two properties that most cheaply
+  stop text looking accidental.
+
+- `build_factory` takes a `FactoryParts` struct instead of eight positional
+  arguments. Adding the snapshot request made it eight, which is where a reordering
+  hazard starts for the next reader.
+
 
 - `App::run` is four named steps instead of one 280-line function, split by concern
   the way `ipc` already is: `install_startup_guards`, `restore_after_a_failed_update`,

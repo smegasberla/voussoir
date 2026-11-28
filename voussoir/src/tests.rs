@@ -131,6 +131,62 @@ fn the_shim_exposes_windows_and_chrome_helpers() {
 }
 
 #[test]
+fn the_shim_exposes_the_accessibility_surface() {
+    let shim = build_shim(None);
+    // Protocol 4. What markup cannot express: an announcement, and the reader
+    // settings that are not available as a CSS media query from a canvas.
+    for member in ["announce", "prefers", "onPrefersChange"] {
+        assert!(shim.contains(member), "a11y.{member} must exist");
+    }
+    const {
+        assert!(
+            SHIM_PROTOCOL >= 4,
+            "version 4 added a11y, so a page can feature-detect it"
+        )
+    };
+}
+
+#[test]
+fn the_announcement_region_is_hidden_from_sight_and_not_from_the_tree() {
+    let shim = build_shim(None);
+    // `display: none` would remove the node from the accessibility tree, which is
+    // the opposite of the point: the clipping technique is what keeps it audible.
+    assert!(
+        shim.contains("\"status\"") && shim.contains("aria-live"),
+        "the live region must carry a status role and a polite live setting"
+    );
+    // The style is one CSS string with no spaces, so the assertion has to name it
+    // the way it is written rather than the way it is normally formatted.
+    assert!(
+        shim.contains("clip-path:inset(50%)"),
+        "hidden from sight, not from the accessibility tree"
+    );
+    // Checked against the style string itself, not the whole shim: the comment
+    // above that line *names* `display: none` to explain why it is not used, and
+    // a whole-string search would trip on its own documentation.
+    let style = shim
+        .lines()
+        .find(|line| line.contains("clip-path:inset(50%)"))
+        .expect("the live region's style line");
+    assert!(
+        !style.contains("display"),
+        "a display:none region is never announced"
+    );
+}
+
+#[test]
+fn the_shim_clears_before_it_sets_the_announcement() {
+    let shim = build_shim(None);
+    // A reader announces a *change*, so the same message twice in a row is
+    // silent unless the text is cleared first. This is a regression guard: the
+    // obvious implementation sets `textContent = message` once and looks fine.
+    assert!(
+        shim.contains("node.textContent = \"\"") || shim.contains("textContent = ''"),
+        "announce must clear the region before setting it"
+    );
+}
+
+#[test]
 fn envelopes_round_trip_through_invoke_command_parsing() {
     assert_eq!(
         parse_envelope(r#"{"ok":{"a":1}}"#).unwrap(),
