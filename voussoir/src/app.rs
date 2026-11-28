@@ -579,16 +579,23 @@ impl Natives {
     ) -> Result<Self, Error> {
         let (mut open, window) = first_window(shell, event_loop)?;
         let label = shell.spec.label_for(&shell.first);
-        let webview = match &window {
-            Some(window) => Some(build_webview(
-                (shell.factory)(
-                    shell.spec.url_for(&shell.spec.entry_for(&shell.first)),
-                    Some(label.clone()),
-                ),
-                window,
-            )?),
-            None => None,
-        };
+        // The webview is built here on every platform that builds its first window
+        // before the loop runs. iOS does neither: `first_window` hands back `None`
+        // and the window is created from inside the loop, so this branch would name
+        // a function that is not imported there — which is exactly how a `cfg` on
+        // the import turned into a compile error on the one target it was for.
+        #[cfg(not(target_os = "ios"))]
+        let webview = Some(build_webview(
+            (shell.factory)(
+                shell.spec.url_for(&shell.spec.entry_for(&shell.first)),
+                Some(label.clone()),
+            ),
+            window
+                .as_ref()
+                .ok_or_else(|| Error::Runtime("the first window was not built".to_owned()))?,
+        )?);
+        #[cfg(target_os = "ios")]
+        let webview: Option<wry::WebView> = None;
 
         // Attaching a menu is a window operation on Linux and Windows, and a no-op on
         // macOS (the bar belongs to the app) and iOS.
